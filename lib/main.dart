@@ -20,7 +20,11 @@ void main() async {
 
   // تسجيل دخول مجهول - يمنع الوصول المباشر لـ Firestore بدون المرور بالتطبيق
   if (FirebaseAuth.instance.currentUser == null) {
-    await FirebaseAuth.instance.signInAnonymously();
+    try {
+      await FirebaseAuth.instance.signInAnonymously();
+    } catch (_) {
+      // إذا فشل Auth لا نوقف التطبيق
+    }
   }
 
   SystemChrome.setPreferredOrientations([
