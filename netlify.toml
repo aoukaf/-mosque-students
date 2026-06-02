@@ -1,0 +1,19 @@
+[build]
+  command   = "bash build_web.sh"
+  publish   = "build/web"
+
+[build.environment]
+  FLUTTER_VERSION = "stable"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options        = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy        = "strict-origin-when-cross-origin"
+
+# إعادة توجيه كل المسارات لـ index.html (Single Page App)
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200

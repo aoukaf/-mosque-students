@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── الأوقاف: يشترط auth token + config فقط، إنشاء مرة واحدة، لا تعديل أبداً ──
+    match /awqaf/{doc} {
+      allow read: if request.auth != null && doc == 'config';
+      allow create: if request.auth != null
+                    && doc == 'config'
+                    && request.resource.data.passwordHash is string
+                    && request.resource.data.passwordHash.size() == 64
+                    && !('password' in request.resource.data);
+      allow update, delete: if false;
+    }
+
+    // ── المساجد: يشترط auth token في كل العمليات ──
+    match /mosques/{mosqueId} {
+      allow read: if request.auth != null;
+
+      allow create: if request.auth != null
+                    && request.resource.data.passwordHash is string
+                    && request.resource.data.passwordHash.size() == 64
+                    && !('password' in request.resource.data);
+
+      allow update: if request.auth != null
+                    && exists(/databases/$(database)/documents/mosques/$(mosqueId))
+                    && !('password' in request.resource.data);
+
+      allow delete: if request.auth != null
+                    && exists(/databases/$(database)/documents/mosques/$(mosqueId));
+    }
+
+    // ── البيانات الفرعية: طلاب، حلقات، حضور، واجبات ──
+    match /mosques/{mosqueId}/{collection}/{document=**} {
+      allow read, write: if request.auth != null
+                         && collection in ['students', 'halqas', 'attendance', 'homework']
+                         && exists(/databases/$(database)/documents/mosques/$(mosqueId));
+    }
+
+    // ── رفض كل ما لم يُذكر صراحةً ──
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
