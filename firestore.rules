@@ -3,9 +3,10 @@ rules_version = '2';
 // ═══════════════════════════════════════════════════════════════════════════
 //  المرحلة 1 (انتقالية): تعمل مع النسخة القديمة 1.0.0 والجديدة 1.1.0 معاً.
 //
-//  - النسخ القديمة: ما زالت تقرأ وتكتب كما كانت (مفتوح لأي مستخدم مسجّل).
-//  - النسخة الجديدة: تفتح "جلسة" بإثبات الهاش وتنسخ الهاش لوثيقة خاصة، حتى
-//    تصبح جاهزة للمرحلة 2 (firestore.rules.phase2) دون أن يُقفل أحد.
+//  - النسخ القديمة: لا تسجّل دخولاً Firebase أصلاً (request.auth فارغ)، لذلك
+//    المسارات القديمة هنا مفتوحة بدون هوية تماماً كما كانت القواعد السابقة.
+//  - النسخة الجديدة: لها هوية مجهولة، تفتح "جلسة" بإثبات الهاش وتنسخ الهاش لوثيقة
+//    خاصة، حتى تصبح جاهزة للمرحلة 2 (firestore.rules.phase2) دون أن يُقفل أحد.
 //
 //  هذه المرحلة لا تحمي البيانات بعد! الحماية الفعلية تبدأ بنشر المرحلة 2.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -48,11 +49,12 @@ service cloud.firestore {
     // ───────── الأوقاف ─────────
 
     match /awqaf/config {
-      allow get: if signedIn();
-      allow create: if signedIn()
-                    && !('password' in request.resource.data)
-                    && (!('passwordHash' in request.resource.data)
-                        || validHash(request.resource.data.passwordHash));
+      allow get: if true; // النسخ القديمة بلا هوية
+      // القديمة تنشئها بهاش، والجديدة (بهوية) بدون هاش
+      allow create: if !('password' in request.resource.data)
+                    && (('passwordHash' in request.resource.data
+                          && validHash(request.resource.data.passwordHash))
+                        || (signedIn() && !('passwordHash' in request.resource.data)));
       // الأوقاف فقط، ولا يجوز أن يبقى فيها هاش (حذف الهاش القديم)
       allow update: if isAwqaf() && !('passwordHash' in request.resource.data);
       allow list, delete: if false;
@@ -101,20 +103,20 @@ service cloud.firestore {
     // ───────── المساجد ─────────
 
     match /mosques/{mosqueId} {
-      allow read: if signedIn();
+      allow read: if true; // النسخ القديمة بلا هوية
 
-      // النسخة القديمة تضع passwordHash بالوثيقة، والجديدة لا تضعه (تضعه بوثيقة خاصة)
-      allow create: if signedIn()
-                    && !('password' in request.resource.data)
-                    && (!('passwordHash' in request.resource.data)
-                        || validHash(request.resource.data.passwordHash));
+      // النسخة القديمة (بلا هوية) تضع passwordHash بالوثيقة، والجديدة (بهوية) لا تضعه
+      allow create: if !('password' in request.resource.data)
+                    && (('passwordHash' in request.resource.data
+                          && validHash(request.resource.data.passwordHash))
+                        || (signedIn() && !('passwordHash' in request.resource.data)));
 
-      allow update: if signedIn()
-                    && exists(mosquePath(mosqueId))
-                    && !('password' in request.resource.data);
+      // مساجد قديمة فيها حقل password (نص صريح من نسخ سابقة): نسمح بالتحديث ما دام الحقل
+      // كما هو (لا يُضاف ولا يُغيَّر)، حتى لا تُرفض كل التعديلات. يُحذف الحقل يدوياً.
+      allow update: if exists(mosquePath(mosqueId))
+                    && request.resource.data.get('password', null) == resource.data.get('password', null);
 
-      allow delete: if signedIn()
-                    && exists(mosquePath(mosqueId));
+      allow delete: if exists(mosquePath(mosqueId));
     }
 
     // الهاش الخاص: لا يقرأه أي عميل أبداً، القواعد وحدها تقرأه للتحقق
@@ -169,8 +171,7 @@ service cloud.firestore {
     // ───────── البيانات الفرعية: طلاب، حلقات، حضور، واجبات (مفتوحة بالمرحلة 1) ─────────
 
     match /mosques/{mosqueId}/{collection}/{document=**} {
-      allow read, write: if signedIn()
-                         && collection in ['students', 'halqas', 'attendance', 'homework']
+      allow read, write: if collection in ['students', 'halqas', 'attendance', 'homework']
                          && exists(mosquePath(mosqueId));
     }
 

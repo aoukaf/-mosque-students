@@ -21,11 +21,14 @@ void main() async {
   );
 
   // تسجيل دخول مجهول - يمنع الوصول المباشر لـ Firestore بدون المرور بالتطبيق
+  String? authError; // تشخيص مؤقت: يظهر سبب فشل الدخول المجهول بدل تجاهله بصمت
   if (FirebaseAuth.instance.currentUser == null) {
     try {
       await FirebaseAuth.instance.signInAnonymously();
-    } catch (_) {
+    } catch (e) {
       // إذا فشل Auth لا نوقف التطبيق
+      authError = e is FirebaseAuthException ? '${e.code}: ${e.message}' : '$e';
+      debugPrint('AUTH FAILED: $authError');
     }
   }
 
@@ -93,23 +96,59 @@ void main() async {
     setupDone: !loggedOut && mosqueId != null,
     isAwqaf: !loggedOut && isAwqaf,
     notice: notice,
+    authError: authError,
     parent: !loggedOut && isParent
         ? ParentScreen(code: parentCode, mosqueId: parentMosqueId, studentId: parentStudentId)
         : null,
   ));
 }
 
-class MosqueStudentsApp extends StatelessWidget {
+class MosqueStudentsApp extends StatefulWidget {
   final bool setupDone;
   final bool isAwqaf;
   final Widget? parent;
   final String? notice;
+  final String? authError;
   const MosqueStudentsApp(
-      {super.key, required this.setupDone, required this.isAwqaf, this.parent, this.notice});
+      {super.key,
+      required this.setupDone,
+      required this.isAwqaf,
+      this.parent,
+      this.notice,
+      this.authError});
+
+  @override
+  State<MosqueStudentsApp> createState() => _MosqueStudentsAppState();
+}
+
+class _MosqueStudentsAppState extends State<MosqueStudentsApp> {
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
+
+  bool get setupDone => widget.setupDone;
+  bool get isAwqaf => widget.isAwqaf;
+  Widget? get parent => widget.parent;
+  String? get notice => widget.notice;
+
+  @override
+  void initState() {
+    super.initState();
+    final err = widget.authError;
+    if (err != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _messengerKey.currentState?.showSnackBar(SnackBar(
+          duration: const Duration(seconds: 30),
+          backgroundColor: Colors.red.shade800,
+          content: SelectableText('فشل تسجيل الدخول المجهول:\n$err',
+              style: const TextStyle(color: Colors.white)),
+        ));
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: _messengerKey,
       title: 'سجلات طلاب المسجد',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.theme,

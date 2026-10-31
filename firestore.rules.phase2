@@ -120,7 +120,8 @@ service cloud.firestore {
                     && !('passwordHash' in request.resource.data);
 
       // لا نشترط غياب passwordHash هنا: قد يبقى هاش قديم عند مسجد لم يُفتح بعد، ويُحذف عند أول فتح
-      allow update: if isTeacher(mosqueId) && !('password' in request.resource.data);
+      allow update: if isTeacher(mosqueId)
+                    && request.resource.data.get('password', null) == resource.data.get('password', null);
       allow delete: if isAwqaf();
     }
 

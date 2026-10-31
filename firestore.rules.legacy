@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /awqaf/{doc} {
+      allow read: if true;
+      allow create: if request.resource.data.passwordHash is string
+                    && request.resource.data.passwordHash.size() == 64
+                    && !('password' in request.resource.data);
+      allow update, delete: if false;
+    }
+
+    match /mosques/{mosqueId} {
+      allow read: if true;
+      allow create: if request.resource.data.passwordHash is string
+              && request.resource.data.passwordHash.size() == 64;
+
+     allow update: if exists(/databases/$(database)/documents/mosques/$(mosqueId));
+      allow delete: if exists(/databases/$(database)/documents/mosques/$(mosqueId));
+    }
+
+    match /mosques/{mosqueId}/{collection}/{document=**} {
+      allow read, write: if collection in ['students', 'halqas', 'attendance', 'homework']
+                         && exists(/databases/$(database)/documents/mosques/$(mosqueId));
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

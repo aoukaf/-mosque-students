@@ -177,7 +177,13 @@ class SyncService {
   /// يرمي عند فشل الاتصال. القاعدة على السيرفر هي من يتحقق من الهاش، لا التطبيق.
   Future<bool> teacherLogin(String mosqueId, String passwordHash,
       {bool migrate = true}) async {
-    final uid = await _ensureUid();
+    final String uid;
+    try {
+      uid = await _ensureUid();
+    } catch (_) {
+      // لا هوية Firebase (فشل الدخول المجهول): نعمل بالطريقة القديمة كما كان 1.0.0
+      return _legacyTeacherLogin(mosqueId, passwordHash);
+    }
     final denied = await _isPermissionDenied(() => _mosqueDoc(mosqueId)
         .collection('sessions')
         .doc(uid)
@@ -186,7 +192,7 @@ class SyncService {
       'version': appVersion,
       'createdAt': FieldValue.serverTimestamp(),
     }));
-    if (denied) return false;
+    if (denied) return _legacyTeacherLogin(mosqueId, passwordHash);
 
     if (migrate) {
       // نسخ الهاش القديم من وثيقة المسجد (المقروءة) إلى الوثيقة الخاصة.
@@ -202,6 +208,33 @@ class SyncService {
     await prefs.setString(_localHashKey, passwordHash);
     await _markSession('mosque:$mosqueId');
     return true;
+  }
+
+  /// توافق مع قواعد لا تدعم الجلسات بعد (القديمة): نتحقق بقراءة الهاش القديم كما كان يفعل 1.0.0.
+  /// لا ينجح إلا ما دام الهاش القديم مقروءاً، فيتوقف تلقائياً مع القواعد الصارمة.
+  /// لا نضع علامة جلسة هنا، فيُعاد فتح جلسة حقيقية بالتشغيل التالي عند نشر القواعد الجديدة.
+  Future<bool> _legacyTeacherLogin(String mosqueId, String passwordHash) async {
+    try {
+      final doc = await _mosqueDoc(mosqueId).get().timeout(_netTimeout);
+      if (doc.data()?['passwordHash'] != passwordHash) return false;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localHashKey, passwordHash);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _legacyAwqafLogin(String passwordHash) async {
+    try {
+      final doc = await _db.collection(_awqafCollection).doc('config').get().timeout(_netTimeout);
+      if (doc.data()?['passwordHash'] != passwordHash) return false;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localAwqafHashKey, passwordHash);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// عند تشغيل التطبيق: يتأكد أن للجهاز جلسة معلم صالحة (ويرحّل المساجد القديمة بصمت).
@@ -251,21 +284,35 @@ class SyncService {
   // =================== إدارة المسجد ===================
 
   Future<void> createMosque(String mosqueId, String passwordHash, String name) async {
-    final batch = _db.batch();
-    batch.set(_mosqueDoc(mosqueId), {
+    final info = {
       'createdAt': FieldValue.serverTimestamp(),
       'name': name,
       'studentCount': 0,
       'halqaCount': _defaultHalqas.length,
       'scheduleType': 'yearRound',
-    });
-    batch.set(_privateConfig(mosqueId), {'passwordHash': passwordHash});
-    await batch.commit();
+    };
+    try {
+      final batch = _db.batch();
+      batch.set(_mosqueDoc(mosqueId), info);
+      batch.set(_privateConfig(mosqueId), {'passwordHash': passwordHash});
+      await batch.commit();
+    } on FirebaseException catch (e) {
+      if (e.code != 'permission-denied') rethrow;
+      // قواعد قديمة بلا مسار الهاش الخاص: نحفظ الهاش بوثيقة المسجد كما كان بـ 1.0.0
+      await _mosqueDoc(mosqueId).set({...info, 'passwordHash': passwordHash});
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localHashKey, passwordHash);
+      await _createDefaultHalqas(mosqueId);
+      return;
+    }
 
     if (!await teacherLogin(mosqueId, passwordHash, migrate: false)) {
       throw StateError('تعذّر فتح جلسة للمسجد الجديد');
     }
+    await _createDefaultHalqas(mosqueId);
+  }
 
+  Future<void> _createDefaultHalqas(String mosqueId) async {
     final halqas = _db.batch();
     for (final halqa in _defaultHalqas) {
       halqas.set(_halqasRefOf(mosqueId).doc(halqa),
@@ -291,15 +338,22 @@ class SyncService {
     if (passwordHash != null) {
       // الهاش الجديد + جلسة هذا الجهاز بنفس الدفعة، فتبقى جلسته صالحة وتسقط جلسات الأجهزة الأخرى
       final id = _mosqueId!;
-      final uid = await _ensureUid();
-      final batch = _db.batch();
-      batch.set(_privateConfig(id), {'passwordHash': passwordHash});
-      batch.set(_mosqueDoc(id).collection('sessions').doc(uid), {
-        'hash': passwordHash,
-        'version': appVersion,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      await batch.commit();
+      try {
+        final uid = await _ensureUid();
+        final batch = _db.batch();
+        batch.set(_privateConfig(id), {'passwordHash': passwordHash});
+        batch.set(_mosqueDoc(id).collection('sessions').doc(uid), {
+          'hash': passwordHash,
+          'version': appVersion,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        await batch.commit();
+      } on FirebaseException catch (e) {
+        if (e.code != 'permission-denied') rethrow;
+        data['passwordHash'] = passwordHash; // قواعد قديمة: الهاش بوثيقة المسجد
+      } catch (_) {
+        data['passwordHash'] = passwordHash; // بدون هوية (فشل الدخول المجهول)
+      }
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_localHashKey, passwordHash);
     }
@@ -404,7 +458,12 @@ class SyncService {
 
   /// يفتح جلسة الأوقاف. true = كلمة المرور صحيحة. التحقق على السيرفر عبر القواعد.
   Future<bool> awqafLogin(String passwordHash, {bool migrate = true}) async {
-    final uid = await _ensureUid();
+    final String uid;
+    try {
+      uid = await _ensureUid();
+    } catch (_) {
+      return _legacyAwqafLogin(passwordHash); // لا هوية Firebase: الطريقة القديمة
+    }
     final denied = await _isPermissionDenied(() => _db
         .collection('awqafSessions')
         .doc(uid)
@@ -413,7 +472,7 @@ class SyncService {
       'version': appVersion,
       'createdAt': FieldValue.serverTimestamp(),
     }));
-    if (denied) return false;
+    if (denied) return _legacyAwqafLogin(passwordHash);
 
     if (migrate) {
       // نسخ الهاش القديم من وثيقة config (المقروءة) إلى الوثيقة الخاصة
