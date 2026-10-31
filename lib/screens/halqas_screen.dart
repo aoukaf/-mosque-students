@@ -63,6 +63,39 @@ class _HalqasScreenState extends State<HalqasScreen> {
     }
   }
 
+  Future<void> _renameHalqa(String oldName) async {
+    final r = Responsive(context);
+    final ctrl = TextEditingController(text: oldName);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('تعديل اسم الحلقة', style: TextStyle(fontSize: r.fontSize(17))),
+        content: TextField(
+          controller: ctrl,
+          textDirection: TextDirection.rtl,
+          style: TextStyle(fontSize: r.fontSize(14)),
+          decoration: InputDecoration(hintText: 'الاسم الجديد', hintStyle: TextStyle(fontSize: r.fontSize(13))),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('حفظ')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result == null || result.isEmpty || result == oldName) return;
+    try {
+      if (await _sync.halqaExists(result)) {
+        if (mounted) _showError('يوجد حلقة بهذا الاسم مسبقاً');
+        return;
+      }
+      await _sync.renameHalqa(oldName, result);
+    } catch (e) {
+      if (mounted) _showError('تعذّر تعديل الاسم، تحقق من الاتصال');
+    }
+  }
+
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: Colors.red[700]),
@@ -153,9 +186,20 @@ class _HalqasScreenState extends State<HalqasScreen> {
                               child: Text('${i + 1}', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: r.fontSize(14))),
                             ),
                             title: Text(halqa, style: TextStyle(fontSize: r.fontSize(r.isTablet ? 17 : 15), fontWeight: FontWeight.w600)),
-                            trailing: IconButton(
-                              icon: Icon(Icons.delete_outline, color: Colors.red, size: r.iconSize(22)),
-                              onPressed: () => _deleteHalqa(halqa),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: Icon(Icons.edit_outlined, color: AppTheme.primaryGreen, size: r.iconSize(22)),
+                                  tooltip: 'تعديل الاسم',
+                                  onPressed: () => _renameHalqa(halqa),
+                                ),
+                                IconButton(
+                                  icon: Icon(Icons.delete_outline, color: Colors.red, size: r.iconSize(22)),
+                                  tooltip: 'حذف',
+                                  onPressed: () => _deleteHalqa(halqa),
+                                ),
+                              ],
                             ),
                           ),
                         );

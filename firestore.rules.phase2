@@ -1,0 +1,199 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  المرحلة 2 (صارمة): هذه هي الحماية الفعلية. لا تنشرها قبل اتباع الخطوات
+//  بملف SECURITY_ROLLOUT.md، وإلا ستتوقف النسخ القديمة 1.0.0 عن العمل.
+//
+//    معلم        ← يقرأ ويكتب بمسجده فقط (جلسة هاشها = هاش المسجد الحالي)
+//    ولي أمر     ← يقرأ وثيقة ابنه وسجلاته فقط (جلسة برمز ما زال صالحاً)، ولا يكتب
+//    الأوقاف     ← يقرأ كل المساجد ويحذف مسجداً
+//    أي أحد آخر  ← لا شيء
+// ═══════════════════════════════════════════════════════════════════════════
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ───────── دوال مساعدة ─────────
+
+    function signedIn() { return request.auth != null; }
+    function validHash(h) { return h is string && h.size() == 64; }
+
+    function mosquePath(m) { return /databases/$(database)/documents/mosques/$(m); }
+    function configPath(m) { return /databases/$(database)/documents/mosques/$(m)/private/config; }
+    function sessionPath(m) { return /databases/$(database)/documents/mosques/$(m)/sessions/$(request.auth.uid); }
+    function parentSessionPath(m) { return /databases/$(database)/documents/mosques/$(m)/parents/$(request.auth.uid); }
+    function parentCodePath(c) { return /databases/$(database)/documents/parentCodes/$(c); }
+
+    function awqafConfig() { return /databases/$(database)/documents/awqaf/config; }
+    function awqafPrivate() { return /databases/$(database)/documents/awqaf/private; }
+    function awqafSessionPath() { return /databases/$(database)/documents/awqafSessions/$(request.auth.uid); }
+
+    // هاش قديم قد يبقى بمسجد لم يفتحه معلمه بعد إعلان المرحلة 2 (يُستعمل فقط للترحيل)
+    function legacyMosqueHash(m) { return get(mosquePath(m)).data.get('passwordHash', null); }
+
+    function isTeacher(m) {
+      return signedIn()
+          && exists(sessionPath(m))
+          && exists(configPath(m))
+          && get(sessionPath(m)).data.hash == get(configPath(m)).data.passwordHash;
+    }
+
+    function isAwqaf() {
+      return signedIn()
+          && exists(awqafSessionPath())
+          && exists(awqafPrivate())
+          && get(awqafSessionPath()).data.hash == get(awqafPrivate()).data.passwordHash;
+    }
+
+    // ولي أمر لديه جلسة بمسجد m، ورمزه ما زال موجوداً (يبطل عند إنشاء رمز جديد أو حذف الطالب)
+    function hasParentAccess(m) {
+      return signedIn()
+          && exists(parentSessionPath(m))
+          && exists(parentCodePath(get(parentSessionPath(m)).data.code));
+    }
+
+    function isParentOf(m, studentId) {
+      return hasParentAccess(m) && get(parentSessionPath(m)).data.studentId == studentId;
+    }
+
+    // ───────── الأوقاف ─────────
+
+    match /awqaf/config {
+      allow get: if signedIn();  // علامة وجود فقط، لا يوجد فيها هاش
+      allow create: if signedIn()
+                    && !('password' in request.resource.data)
+                    && !('passwordHash' in request.resource.data);
+      allow update: if isAwqaf() && !('passwordHash' in request.resource.data);
+      allow list, delete: if false;
+    }
+
+    match /awqaf/private {
+      allow read, delete: if false;
+      allow create: if signedIn()
+                    && request.resource.data.keys().hasOnly(['passwordHash'])
+                    && validHash(request.resource.data.passwordHash)
+                    && (!exists(awqafConfig())
+                        || request.resource.data.passwordHash == get(awqafConfig()).data.get('passwordHash', null));
+      allow update: if isAwqaf()
+                    && request.resource.data.keys().hasOnly(['passwordHash'])
+                    && validHash(request.resource.data.passwordHash);
+    }
+
+    match /awqafSessions/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['hash', 'version', 'createdAt'])
+          && request.resource.data.hash is string
+          && (
+               (existsAfter(awqafPrivate())
+                  && request.resource.data.hash == getAfter(awqafPrivate()).data.passwordHash)
+            || (!existsAfter(awqafPrivate())
+                  && exists(awqafConfig())
+                  && request.resource.data.hash == get(awqafConfig()).data.get('passwordHash', null))
+          );
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ───────── رموز أولياء الأمور ─────────
+    // get فقط (بدون list)، والإنشاء والحذف لمعلم المسجد المعني.
+
+    match /parentCodes/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn()
+                    && request.resource.data.keys().hasOnly(['mosqueId', 'studentId', 'createdAt'])
+                    && request.resource.data.mosqueId is string
+                    && request.resource.data.studentId is string
+                    && isTeacher(request.resource.data.mosqueId);
+      allow delete: if signedIn()
+                    && (isTeacher(resource.data.mosqueId) || isAwqaf());
+      allow list, update: if false;
+    }
+
+    // ───────── المساجد ─────────
+
+    match /mosques/{mosqueId} {
+      allow get: if isTeacher(mosqueId) || isAwqaf() || hasParentAccess(mosqueId);
+      allow list: if isAwqaf();
+
+      // مسجد جديد بدون هاش علني (الهاش بوثيقة خاصة)
+      allow create: if signedIn()
+                    && !('password' in request.resource.data)
+                    && !('passwordHash' in request.resource.data);
+
+      // لا نشترط غياب passwordHash هنا: قد يبقى هاش قديم عند مسجد لم يُفتح بعد، ويُحذف عند أول فتح
+      allow update: if isTeacher(mosqueId) && !('password' in request.resource.data);
+      allow delete: if isAwqaf();
+    }
+
+    match /mosques/{mosqueId}/private/{doc} {
+      allow read: if false;
+      allow create: if signedIn() && doc == 'config'
+                    && request.resource.data.keys().hasOnly(['passwordHash'])
+                    && validHash(request.resource.data.passwordHash)
+                    && (!exists(mosquePath(mosqueId))
+                        || request.resource.data.passwordHash == legacyMosqueHash(mosqueId));
+      allow update: if signedIn() && doc == 'config'
+                    && request.resource.data.keys().hasOnly(['passwordHash'])
+                    && validHash(request.resource.data.passwordHash)
+                    && (isTeacher(mosqueId)
+                        || (exists(mosquePath(mosqueId))
+                            && request.resource.data.passwordHash == legacyMosqueHash(mosqueId)));
+      allow delete: if isAwqaf();
+    }
+
+    match /mosques/{mosqueId}/sessions/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list: if isAwqaf();
+      allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['hash', 'version', 'createdAt'])
+          && request.resource.data.hash is string
+          && (
+               (existsAfter(configPath(mosqueId))
+                  && request.resource.data.hash == getAfter(configPath(mosqueId)).data.passwordHash)
+            || (!existsAfter(configPath(mosqueId))
+                  && exists(mosquePath(mosqueId))
+                  && request.resource.data.hash == legacyMosqueHash(mosqueId))
+          );
+      allow delete: if signedIn() && (request.auth.uid == uid || isTeacher(mosqueId) || isAwqaf());
+    }
+
+    match /mosques/{mosqueId}/parents/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list: if isAwqaf();
+      allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['code', 'studentId', 'createdAt'])
+          && request.resource.data.code is string
+          && exists(parentCodePath(request.resource.data.code))
+          && get(parentCodePath(request.resource.data.code)).data.mosqueId == mosqueId
+          && get(parentCodePath(request.resource.data.code)).data.studentId == request.resource.data.studentId;
+      allow delete: if signedIn() && (request.auth.uid == uid || isTeacher(mosqueId) || isAwqaf());
+    }
+
+    // ───────── البيانات الفرعية: طلاب، حلقات، حضور، واجبات ─────────
+
+    // المعلم: قراءة وكتابة. الأوقاف: قراءة وحذف (لحذف مسجد).
+    match /mosques/{mosqueId}/{collection}/{document=**} {
+      allow read: if collection in ['students', 'halqas', 'attendance', 'homework']
+                  && (isTeacher(mosqueId) || isAwqaf());
+      allow write: if collection in ['students', 'halqas', 'attendance', 'homework']
+                   && isTeacher(mosqueId);
+      allow delete: if collection in ['students', 'halqas', 'attendance', 'homework']
+                    && isAwqaf();
+    }
+
+    // ولي الأمر: وثيقة ابنه وسجلاته فقط، جلب مباشر (get) بدون list
+    match /mosques/{mosqueId}/students/{studentId} {
+      allow get: if isParentOf(mosqueId, studentId);
+    }
+    match /mosques/{mosqueId}/attendance/{date}/records/{studentId} {
+      allow get: if isParentOf(mosqueId, studentId);
+    }
+    match /mosques/{mosqueId}/homework/{date}/records/{studentId} {
+      allow get: if isParentOf(mosqueId, studentId);
+    }
+
+    // ───────── رفض كل ما لم يُذكر صراحةً ─────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

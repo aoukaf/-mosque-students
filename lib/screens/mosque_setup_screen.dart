@@ -8,11 +8,13 @@ import '../models/sync_service.dart';
 import '../models/app_theme.dart';
 import 'home_screen.dart';
 import 'awqaf_screen.dart';
+import 'parent_screen.dart';
 
-enum _SetupPage { initial, newMosque, showId, existing, awqaf }
+enum _SetupPage { initial, newMosque, showId, existing, awqaf, parent }
 
 class MosqueSetupScreen extends StatefulWidget {
-  const MosqueSetupScreen({super.key});
+  final String? notice; // رسالة تُعرض عند الفتح (مثل انتهاء رمز ولي الأمر)
+  const MosqueSetupScreen({super.key, this.notice});
 
   @override
   State<MosqueSetupScreen> createState() => _MosqueSetupScreenState();
@@ -27,6 +29,7 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
   final _idCtrl = TextEditingController();
   final _existingPwCtrl = TextEditingController();
   final _awqafPwCtrl = TextEditingController();
+  final _parentCodeCtrl = TextEditingController();
 
   bool _loading = false;
   bool _obscurePw = true;
@@ -47,6 +50,13 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
   void initState() {
     super.initState();
     _loadLockState();
+    if (widget.notice != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(widget.notice!)));
+        }
+      });
+    }
   }
 
   Future<void> _loadLockState() async {
@@ -84,6 +94,7 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
     _idCtrl.dispose();
     _existingPwCtrl.dispose();
     _awqafPwCtrl.dispose();
+    _parentCodeCtrl.dispose();
     super.dispose();
   }
 
@@ -142,7 +153,7 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
       if (!exists) {
         await SyncService().createAwqaf(hash);
       } else {
-        final valid = await SyncService().verifyAwqaf(hash);
+        final valid = await SyncService().awqafLogin(hash);
         if (!valid) {
           _failedAttempts++;
           if (_failedAttempts >= 3) {
@@ -165,6 +176,62 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const AwqafScreen()),
         );
+      }
+    } catch (e) {
+      setState(() { _error = 'حدث خطأ، تأكد من اتصالك بالإنترنت'; _loading = false; });
+    }
+  }
+
+  Future<void> _loginParent() async {
+    final code = SyncService.normalizeParentCode(_parentCodeCtrl.text);
+    if (code.length != 8) {
+      setState(() => _error = 'الرمز مكوّن من 8 خانات (مثال: ABCD-2345)');
+      return;
+    }
+    if (_isLocked()) {
+      setState(() => _error = _lockMessage());
+      return;
+    }
+    setState(() { _loading = true; _error = null; });
+
+    final online = await SyncService().isOnline;
+    if (!online) {
+      setState(() { _error = 'يلزم الاتصال بالإنترنت'; _loading = false; });
+      return;
+    }
+
+    try {
+      final link = await SyncService().resolveParentCode(code);
+      if (link == null) {
+        _failedAttempts++;
+        if (_failedAttempts >= 3) {
+          _lockUntil = DateTime.now().add(const Duration(seconds: 30));
+        }
+        await _saveLockState();
+        setState(() {
+          _error = _failedAttempts >= 3
+              ? _lockMessage()
+              : 'الرمز غير صحيح (${3 - _failedAttempts} محاولات متبقية)';
+          _loading = false;
+        });
+        return;
+      }
+      // الجلسة هي ما تسمح لهذا الجهاز بقراءة بيانات ابن هذا الرمز فقط (تتحقق منها القواعد)
+      if (!await SyncService().openParentSession(code, link)) {
+        setState(() { _error = 'تعذّر قبول الرمز، اطلب رمزاً جديداً من المعلم'; _loading = false; });
+        return;
+      }
+      await _resetLockState();
+      // لا نستخدم mosqueIdKey حتى لا يُعامَل الجهاز كجهاز معلم
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(SyncService.userRoleKey, 'parent');
+      await prefs.setString(SyncService.parentCodeKey, code);
+      await prefs.setString(SyncService.parentMosqueIdKey, link.mosqueId);
+      await prefs.setString(SyncService.parentStudentIdKey, link.studentId);
+      if (mounted) {
+        Navigator.of(context).pushReplacement(MaterialPageRoute(
+          builder: (_) => ParentScreen(code: code, mosqueId: link.mosqueId, studentId: link.studentId),
+        ));
       }
     } catch (e) {
       setState(() { _error = 'حدث خطأ، تأكد من اتصالك بالإنترنت'; _loading = false; });
@@ -205,7 +272,7 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
 
     try {
       final id = _generateMosqueId();
-      await SyncService().createMosque(id, _hashPassword(id, pw), name, pw);
+      await SyncService().createMosque(id, _hashPassword(id, pw), name);
       SyncService().initialize(id);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(SyncService.mosqueIdKey, id);
@@ -255,7 +322,7 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
     }
 
     try {
-      final valid = await SyncService().verifyMosque(raw, _hashPassword(raw, pw));
+      final valid = await SyncService().teacherLogin(raw, _hashPassword(raw, pw));
       if (!valid) {
         _failedAttempts++;
         if (_failedAttempts >= 3) {
@@ -304,6 +371,7 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
               _SetupPage.showId    => _buildShowId(),
               _SetupPage.existing  => _buildExisting(),
               _SetupPage.awqaf     => _buildAwqaf(),
+              _SetupPage.parent    => _buildParent(),
             },
           ),
         ),
@@ -366,9 +434,11 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
               borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
             ),
             padding: const EdgeInsets.fromLTRB(28, 32, 28, 24),
-            child: Column(
+            child: Center(
+             child: SingleChildScrollView(
+              child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 _OptionCard(
                   icon: Icons.add_circle_outline,
@@ -400,7 +470,80 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
                     _error = null;
                   }),
                 ),
+                const SizedBox(height: 16),
+                _OptionCard(
+                  icon: Icons.family_restroom,
+                  title: 'ولي أمر',
+                  subtitle: 'تابع تقدم ابنك برمز من المعلم',
+                  color: Colors.teal.shade700,
+                  onTap: () => setState(() {
+                    _page = _SetupPage.parent;
+                    _error = null;
+                  }),
+                ),
               ],
+            ),
+           ),
+          ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // =================== شاشة ولي الأمر ===================
+
+  Widget _buildParent() {
+    return Column(
+      key: const ValueKey('parent'),
+      children: [
+        _TopBar(
+          title: 'دخول ولي الأمر',
+          onBack: () => setState(() {
+            _page = _SetupPage.initial;
+            _error = null;
+            _parentCodeCtrl.clear();
+          }),
+        ),
+        Expanded(
+          child: _WhiteCard(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'أدخل الرمز الذي أرسله لك معلم الحلقة لمتابعة حضور ابنك وتقدمه في الحفظ.',
+                    style: TextStyle(color: Colors.grey.shade600, height: 1.6),
+                  ),
+                  const SizedBox(height: 28),
+                  const _Label('رمز الطالب'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _parentCodeCtrl,
+                    textAlign: TextAlign.center,
+                    textDirection: TextDirection.ltr,
+                    textCapitalization: TextCapitalization.characters,
+                    style: const TextStyle(letterSpacing: 3, fontWeight: FontWeight.bold, fontSize: 18),
+                    decoration: InputDecoration(
+                      hintText: 'XXXX-XXXX',
+                      hintStyle: const TextStyle(letterSpacing: 3, color: Colors.grey, fontSize: 18),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    ),
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 16),
+                    _ErrorBox(_error!),
+                  ],
+                  const SizedBox(height: 28),
+                  _ActionButton(
+                    label: 'دخول',
+                    loading: _loading,
+                    color: Colors.teal.shade700,
+                    onPressed: _loginParent,
+                  ),
+                ],
+              ),
             ),
           ),
         ),

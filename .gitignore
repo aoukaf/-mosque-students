@@ -56,3 +56,8 @@ Thumbs.db
 
 # GitHub Actions local overrides
 .github/local/
+
+# مفاتيح التوقيع (لا تُرفع أبداً)
+*.jks
+*.keystore
+android/key.properties

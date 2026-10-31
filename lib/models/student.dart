@@ -7,6 +7,7 @@ class Student {
   int partsCompleted; // عدد الأجزاء المكتملة (من 30)
   int stars; // عدد النجوم (حتى 5000)
   String notes;
+  String parentCode; // رمز دخول ولي الأمر (فارغ إذا لم يُنشأ)
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -17,6 +18,7 @@ class Student {
     this.partsCompleted = 0,
     this.stars = 0,
     this.notes = '',
+    this.parentCode = '',
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : createdAt = createdAt ?? DateTime.now(),
@@ -30,6 +32,7 @@ class Student {
       'partsCompleted': partsCompleted,
       'stars': stars,
       'notes': notes,
+      'parentCode': parentCode,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
     };
@@ -43,6 +46,7 @@ class Student {
       partsCompleted: (map['partsCompleted'] as num?)?.toInt() ?? 0,
       stars: (map['stars'] as num?)?.toInt() ?? 0,
       notes: map['notes'] as String? ?? '',
+      parentCode: map['parentCode'] as String? ?? '',
       createdAt: _parseDate(map['createdAt']),
       updatedAt: _parseDate(map['updatedAt']),
     );
@@ -65,6 +69,7 @@ class Student {
     int? partsCompleted,
     int? stars,
     String? notes,
+    String? parentCode,
   }) {
     return Student(
       id: id ?? this.id,
@@ -73,6 +78,7 @@ class Student {
       partsCompleted: partsCompleted ?? this.partsCompleted,
       stars: stars ?? this.stars,
       notes: notes ?? this.notes,
+      parentCode: parentCode ?? this.parentCode,
       createdAt: createdAt,
       updatedAt: DateTime.now(),
     );

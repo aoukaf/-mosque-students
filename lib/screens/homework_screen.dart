@@ -8,7 +8,8 @@ import '../utils/responsive.dart';
 class HomeworkScreen extends StatefulWidget {
   final List<Student> students;
   final List<String> halqas;
-  const HomeworkScreen({super.key, required this.students, required this.halqas});
+  final String? halqaName;
+  const HomeworkScreen({super.key, required this.students, required this.halqas, this.halqaName});
 
   @override
   State<HomeworkScreen> createState() => _HomeworkScreenState();
@@ -201,7 +202,7 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('سجل الوظائف', style: TextStyle(fontSize: r.fontSize(r.isTablet ? 20 : 17), fontWeight: FontWeight.bold)),
+        title: Text(widget.halqaName == null ? 'سجل الوظائف' : 'الوظائف - ${widget.halqaName}', style: TextStyle(fontSize: r.fontSize(r.isTablet ? 20 : 17), fontWeight: FontWeight.bold)),
         toolbarHeight: r.isTablet ? 64 : 56,
         backgroundColor: const Color(0xFF5C4A8F),
         foregroundColor: Colors.white,

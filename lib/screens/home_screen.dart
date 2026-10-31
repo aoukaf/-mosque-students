@@ -14,6 +14,7 @@ import 'student_detail_screen.dart';
 import 'halqas_screen.dart';
 import 'statistics_screen.dart';
 import 'attendance_screen.dart';
+import 'halqa_picker_screen.dart';
 import 'mosque_settings_screen.dart';
 import 'homework_screen.dart';
 
@@ -143,7 +144,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     if (confirm == true) {
       try {
-        await _sync.deleteStudent(student.id);
+        await _sync.deleteStudent(student.id, parentCode: student.parentCode);
       } catch (e) {
         if (mounted) _showError('تعذّر حذف الطالب، تحقق من الاتصال');
       }
@@ -183,13 +184,27 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.checklist, size: r.iconSize(24)),
             tooltip: 'سجل الحضور',
             onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => AttendanceScreen(students: _students, halqas: _halqas))),
+                MaterialPageRoute(builder: (_) => HalqaPickerScreen(
+                  title: 'سجل الحضور - اختر الحلقة',
+                  color: AppTheme.primaryGreen,
+                  students: _students,
+                  halqas: _halqas,
+                  builder: (name, list, halqas) =>
+                      AttendanceScreen(students: list, halqas: halqas, halqaName: name),
+                ))),
           ),
           IconButton(
             icon: Icon(Icons.assignment, size: r.iconSize(24)),
             tooltip: 'سجل الوظائف',
             onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => HomeworkScreen(students: _students, halqas: _halqas))),
+                MaterialPageRoute(builder: (_) => HalqaPickerScreen(
+                  title: 'سجل الوظائف - اختر الحلقة',
+                  color: const Color(0xFF5C4A8F),
+                  students: _students,
+                  halqas: _halqas,
+                  builder: (name, list, halqas) =>
+                      HomeworkScreen(students: list, halqas: halqas, halqaName: name),
+                ))),
           ),
           IconButton(
             icon: Icon(Icons.groups, size: r.iconSize(24)),

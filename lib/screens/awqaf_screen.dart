@@ -96,7 +96,12 @@ class _AwqafScreenState extends State<AwqafScreen> {
 
     if (confirmed != true || !mounted) { pwCtrl.dispose(); return; }
 
-    final valid = await _sync.verifyAwqaf(_hashAwqaf(pwCtrl.text.trim()));
+    bool valid;
+    try {
+      valid = await _sync.awqafLogin(_hashAwqaf(pwCtrl.text.trim()), migrate: false);
+    } catch (_) {
+      valid = false;
+    }
     pwCtrl.dispose();
 
     if (!valid) {
@@ -134,6 +139,7 @@ class _AwqafScreenState extends State<AwqafScreen> {
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(SyncService.userRoleKey);
+    await _sync.clearSessionMarker();
     if (mounted) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const MosqueSetupScreen()),

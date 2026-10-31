@@ -8,11 +8,13 @@ import '../utils/responsive.dart';
 class AttendanceScreen extends StatefulWidget {
   final List<Student> students;
   final List<String> halqas;
+  final String? halqaName;
 
   const AttendanceScreen({
     super.key,
     required this.students,
     required this.halqas,
+    this.halqaName,
   });
 
   @override
@@ -23,8 +25,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   final SyncService _sync = SyncService();
 
   DateTime _selectedDate = _today();
-  Map<String, bool> _attendance = {};
-  StreamSubscription<Map<String, bool>>? _sub;
+  Map<String, String> _attendance = {};
+  StreamSubscription<Map<String, String>>? _sub;
   bool _loading = true;
 
   static DateTime _today() {
@@ -89,8 +91,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   }
 
   Future<void> _toggleAttendance(Student student) async {
-    final prev = _attendance[student.id] ?? false;
-    final next = !prev;
+    // التبديل: غائب ← حاضر ← غائب بإذن ← غائب
+    final prev = _attendance[student.id] ?? AttendanceStatus.absent;
+    final next = switch (prev) {
+      AttendanceStatus.absent => AttendanceStatus.present,
+      AttendanceStatus.present => AttendanceStatus.excused,
+      _ => AttendanceStatus.absent,
+    };
     setState(() => _attendance[student.id] = next);
     try {
       await _sync.setAttendance(
@@ -126,11 +133,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final r = Responsive(context);
     final grouped = _groupByHalqa();
     final total = widget.students.length;
-    final present = _attendance.values.where((v) => v).length;
+    final ids = widget.students.map((s) => s.id).toSet();
+    final statuses = _attendance.entries.where((e) => ids.contains(e.key)).map((e) => e.value);
+    final present = statuses.where((v) => v == AttendanceStatus.present).length;
+    final excused = statuses.where((v) => v == AttendanceStatus.excused).length;
+    final absent = total - present - excused;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('سجل الحضور',
+        title: Text(widget.halqaName == null ? 'سجل الحضور' : 'الحضور - ${widget.halqaName}',
             style: TextStyle(
                 fontSize: r.fontSize(r.isTablet ? 20 : 17),
                 fontWeight: FontWeight.bold)),
@@ -213,8 +224,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     _StatBadge(
                         icon: Icons.cancel_outlined,
                         label: 'غائب',
-                        value: '${total - present}',
+                        value: '$absent',
                         color: Colors.redAccent,
+                        r: r),
+                    _StatBadge(
+                        icon: Icons.event_busy,
+                        label: 'غائب بإذن',
+                        value: '$excused',
+                        color: Colors.amberAccent,
                         r: r),
                     _StatBadge(
                         icon: Icons.people_outline,
@@ -248,7 +265,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   final halqa = grouped.keys.elementAt(i);
                   final students = grouped[halqa]!;
                   final halqaPresent =
-                      students.where((s) => _attendance[s.id] == true).length;
+                      students.where((s) => _attendance[s.id] == AttendanceStatus.present).length;
                   return _HalqaSection(
                     halqa: halqa,
                     students: students,
@@ -307,7 +324,7 @@ class _StatBadge extends StatelessWidget {
 class _HalqaSection extends StatelessWidget {
   final String halqa;
   final List<Student> students;
-  final Map<String, bool> attendance;
+  final Map<String, String> attendance;
   final int presentCount;
   final Future<void> Function(Student) onToggle;
   final Responsive r;
@@ -359,7 +376,7 @@ class _HalqaSection extends StatelessWidget {
         // الطلاب
         ...students.map((student) => _StudentRow(
               student: student,
-              present: attendance[student.id] ?? false,
+              status: attendance[student.id] ?? AttendanceStatus.absent,
               onToggle: () => onToggle(student),
               r: r,
             )),
@@ -371,32 +388,47 @@ class _HalqaSection extends StatelessWidget {
 // ===== صف الطالب =====
 class _StudentRow extends StatelessWidget {
   final Student student;
-  final bool present;
+  final String status;
   final VoidCallback onToggle;
   final Responsive r;
 
   const _StudentRow({
     required this.student,
-    required this.present,
+    required this.status,
     required this.onToggle,
     required this.r,
   });
 
   @override
   Widget build(BuildContext context) {
+    final present = status == AttendanceStatus.present;
+    final excused = status == AttendanceStatus.excused;
+    final Color mainColor = present
+        ? AppTheme.lightGreen
+        : excused
+            ? Colors.orange.shade600
+            : Colors.grey.shade400;
+    final String label = present ? 'حاضر' : (excused ? 'غائب بإذن' : 'غائب');
+    final IconData icon = present
+        ? Icons.check_circle
+        : (excused ? Icons.event_busy : Icons.radio_button_unchecked);
+
     return Card(
       margin:
           EdgeInsets.symmetric(horizontal: r.sp(12), vertical: r.sp(3)),
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(r.radius(10))),
-      color: present ? Colors.green.shade50 : Colors.grey.shade50,
+      color: present
+          ? Colors.green.shade50
+          : excused
+              ? Colors.orange.shade50
+              : Colors.grey.shade50,
       child: ListTile(
         contentPadding: EdgeInsets.symmetric(
             horizontal: r.sp(14), vertical: r.sp(2)),
         leading: CircleAvatar(
           radius: r.sp(20),
-          backgroundColor:
-              present ? AppTheme.lightGreen : Colors.grey[350],
+          backgroundColor: mainColor,
           child: Text(
             student.name.isNotEmpty ? student.name[0] : '؟',
             style: TextStyle(
@@ -415,19 +447,16 @@ class _StudentRow extends StatelessWidget {
             padding: EdgeInsets.symmetric(
                 horizontal: r.sp(14), vertical: r.sp(7)),
             decoration: BoxDecoration(
-              color: present ? AppTheme.lightGreen : Colors.grey[400],
+              color: mainColor,
               borderRadius: BorderRadius.circular(r.radius(20)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                    present ? Icons.check_circle : Icons.radio_button_unchecked,
-                    color: Colors.white,
-                    size: r.iconSize(16)),
+                Icon(icon, color: Colors.white, size: r.iconSize(16)),
                 SizedBox(width: r.sp(5)),
                 Text(
-                  present ? 'حاضر' : 'غائب',
+                  label,
                   style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,

@@ -56,6 +56,7 @@ class _AddEditStudentScreenState extends State<AddEditStudentScreen> {
       partsCompleted: _partsCompleted,
       stars: stars,
       notes: _notesCtrl.text.trim(),
+      parentCode: widget.student?.parentCode ?? '',
       createdAt: widget.student?.createdAt,
     );
     Navigator.pop(context, student);

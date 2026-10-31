@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/student.dart';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
@@ -50,6 +52,8 @@ class _PhoneDetail extends StatelessWidget {
       children: [
         _HeaderCard(student: student, r: r),
         SizedBox(height: r.sp(14)),
+        _ParentCodeCard(student: student, r: r),
+        SizedBox(height: r.sp(14)),
         Row(
           children: [
             Expanded(child: _StatCard(icon: Icons.menu_book, value: '${student.partsCompleted}', label: 'جزء مكتمل', subLabel: 'من 30', color: AppTheme.lightGreen, r: r)),
@@ -92,6 +96,8 @@ class _TabletDetail extends StatelessWidget {
           child: Column(
             children: [
               _HeaderCard(student: student, r: r),
+              SizedBox(height: r.sp(16)),
+              _ParentCodeCard(student: student, r: r),
               SizedBox(height: r.sp(16)),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -171,6 +177,143 @@ class _HeaderCard extends StatelessWidget {
                 style: TextStyle(color: AppTheme.primaryGreen, fontWeight: FontWeight.w600, fontSize: r.fontSize(14)),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ParentCodeCard extends StatefulWidget {
+  final Student student;
+  final Responsive r;
+  const _ParentCodeCard({required this.student, required this.r});
+
+  @override
+  State<_ParentCodeCard> createState() => _ParentCodeCardState();
+}
+
+class _ParentCodeCardState extends State<_ParentCodeCard> {
+  bool _busy = false;
+
+  void _toast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+  }
+
+  Future<void> _generate({required bool regenerate}) async {
+    if (regenerate) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('إنشاء رمز جديد'),
+          content: const Text('سيتوقف الرمز القديم عن العمل، وسيحتاج ولي الأمر إلى الرمز الجديد.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('إنشاء')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    setState(() => _busy = true);
+    try {
+      await SyncService().generateParentCode(widget.student);
+    } catch (_) {
+      if (mounted) _toast('تعذّر إنشاء الرمز، تحقق من الاتصال');
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _share(String code) async {
+    final msg = 'السلام عليكم، رمز متابعة الطالب ${widget.student.name} '
+        'في تطبيق سجلات طلاب المسجد:\n\n${SyncService.formatParentCode(code)}\n\n'
+        'حمّل التطبيق واختر «ولي أمر» ثم أدخل الرمز.';
+    try {
+      final ok = await launchUrl(Uri.https('wa.me', '/', {'text': msg}), mode: LaunchMode.externalApplication);
+      if (!ok && mounted) _toast('تعذّر فتح واتساب');
+    } catch (_) {
+      if (mounted) _toast('تعذّر فتح واتساب');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.r;
+    final code = widget.student.parentCode;
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r.cardBorderRadius)),
+      child: Padding(
+        padding: r.cardPadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.family_restroom, color: AppTheme.primaryGreen, size: r.iconSize(22)),
+                SizedBox(width: r.sp(8)),
+                Text('رمز ولي الأمر', style: TextStyle(fontSize: r.fontSize(15), fontWeight: FontWeight.bold, color: AppTheme.primaryGreen)),
+              ],
+            ),
+            SizedBox(height: r.sp(10)),
+            if (code.isEmpty) ...[
+              Text('أنشئ رمزاً وأرسله لولي الأمر ليتابع تقدم ابنه من التطبيق.',
+                  style: TextStyle(fontSize: r.fontSize(13), color: Colors.grey[700])),
+              SizedBox(height: r.sp(10)),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _busy ? null : () => _generate(regenerate: false),
+                  icon: _busy
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.vpn_key),
+                  label: const Text('إنشاء الرمز'),
+                ),
+              ),
+            ] else ...[
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.symmetric(vertical: r.sp(12)),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(r.radius(12)),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: Text(
+                  SyncService.formatParentCode(code),
+                  textAlign: TextAlign.center,
+                  textDirection: TextDirection.ltr,
+                  style: TextStyle(fontSize: r.fontSize(24), fontWeight: FontWeight.bold, letterSpacing: 4),
+                ),
+              ),
+              SizedBox(height: r.sp(10)),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _share(code),
+                      icon: const Icon(Icons.send, size: 18),
+                      label: const Text('واتساب'),
+                    ),
+                  ),
+                  SizedBox(width: r.sp(8)),
+                  IconButton(
+                    tooltip: 'نسخ',
+                    icon: const Icon(Icons.copy_rounded),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: SyncService.formatParentCode(code)));
+                      _toast('تم نسخ الرمز');
+                    },
+                  ),
+                  IconButton(
+                    tooltip: 'رمز جديد',
+                    icon: _busy
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.refresh),
+                    onPressed: _busy ? null : () => _generate(regenerate: true),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
