@@ -9,7 +9,7 @@ class DefaultFirebaseOptions {
 
   // ─── Web ───────────────────────────────────────────────────────────────────
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyB3rBLNZnusYoIKSvBYJZzxmEHzL-wU6Vs',
+    apiKey: 'AIzaSyB3rBlNZnusYoIKSvBYJZzxmEHzL-wU6Vs',
     authDomain: 'bn-aouf.firebaseapp.com',
     projectId: 'bn-aouf',
     storageBucket: 'bn-aouf.firebasestorage.app',

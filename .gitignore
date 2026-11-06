@@ -61,3 +61,6 @@ Thumbs.db
 *.jks
 *.keystore
 android/key.properties
+
+# ناتج البناء (لا يُتتبَّع)
+android/build/
