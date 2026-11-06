@@ -55,7 +55,9 @@ class UpdateService {
   /// مرحلة الأمان التي أعلنها version.json (1 = انتقالية، 2 = القواعد الصارمة).
   static Future<int> fetchSecurityPhase() async {
     final data = await _fetch();
-    return (data?['security_phase'] as num?)?.toInt() ?? 1;
+    final v = data?['security_phase'];
+    if (v is num) return v.toInt();
+    return int.tryParse('${v ?? ''}') ?? 1; // يقبل رقماً أو نصاً، والغائب = 1
   }
 
   static bool _isNewer(String latest, String current) {
