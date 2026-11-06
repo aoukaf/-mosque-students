@@ -5,6 +5,7 @@ import '../models/student.dart';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
 import '../utils/responsive.dart';
+import 'student_archive_screen.dart';
 
 class StudentDetailScreen extends StatelessWidget {
   final Student student;
@@ -52,6 +53,8 @@ class _PhoneDetail extends StatelessWidget {
       children: [
         _HeaderCard(student: student, r: r),
         SizedBox(height: r.sp(14)),
+        _ArchiveCard(student: student, r: r),
+        SizedBox(height: r.sp(14)),
         _ParentCodeCard(student: student, r: r),
         SizedBox(height: r.sp(14)),
         Row(
@@ -96,6 +99,8 @@ class _TabletDetail extends StatelessWidget {
           child: Column(
             children: [
               _HeaderCard(student: student, r: r),
+              SizedBox(height: r.sp(16)),
+              _ArchiveCard(student: student, r: r),
               SizedBox(height: r.sp(16)),
               _ParentCodeCard(student: student, r: r),
               SizedBox(height: r.sp(16)),
@@ -179,6 +184,41 @@ class _HeaderCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ArchiveCard extends StatelessWidget {
+  final Student student;
+  final Responsive r;
+  const _ArchiveCard({required this.student, required this.r});
+
+  @override
+  Widget build(BuildContext context) {
+    final mosqueId = SyncService().currentMosqueId;
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r.cardBorderRadius)),
+      child: ListTile(
+        contentPadding: EdgeInsets.symmetric(horizontal: r.sp(16), vertical: r.sp(6)),
+        leading: Icon(Icons.history, color: AppTheme.primaryGreen, size: r.iconSize(26)),
+        title: Text('أرشيف الحفظ والحضور',
+            style: TextStyle(fontSize: r.fontSize(15), fontWeight: FontWeight.bold, color: AppTheme.primaryGreen)),
+        subtitle: Text('سجل الحضور والوظائف شهراً بشهر', style: TextStyle(fontSize: r.fontSize(12))),
+        trailing: const Icon(Icons.chevron_left),
+        enabled: mosqueId != null,
+        onTap: mosqueId == null
+            ? null
+            : () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => StudentArchiveScreen(
+                      mosqueId: mosqueId,
+                      studentId: student.id,
+                      studentName: student.name,
+                    ),
+                  ),
+                ),
       ),
     );
   }

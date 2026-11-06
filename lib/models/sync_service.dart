@@ -613,8 +613,18 @@ class SyncService {
   /// سجل حضور ووظائف الطالب لآخر [days] يوماً (الأحدث أولاً)، الأيام الفارغة تُحذف
   Future<List<ParentDayRecord>> getStudentHistory(
       String mosqueId, String studentId, {int days = 30}) async {
-    final mosque = _db.collection('mosques').doc(mosqueId);
     final today = DateTime.now();
+    final to = DateTime(today.year, today.month, today.day);
+    final from = DateTime(to.year, to.month, to.day - (days - 1));
+    return (await getStudentHistoryRange(mosqueId, studentId, from, to)).records;
+  }
+
+  /// سجل حضور ووظائف الطالب بين [from] و[to] (شاملتين)، الأحدث أولاً، الأيام الفارغة تُحذف.
+  /// كل يوم = قراءتان (حضور + وظيفة). [failures] = عدد القراءات التي فشلت (لا تُحسب "فارغة").
+  Future<({List<ParentDayRecord> records, int failures})> getStudentHistoryRange(
+      String mosqueId, String studentId, DateTime from, DateTime to) async {
+    final mosque = _db.collection('mosques').doc(mosqueId);
+    var failures = 0;
 
     Future<Map<String, dynamic>?> read(String collection, DateTime d) async {
       try {
@@ -626,12 +636,17 @@ class SyncService {
             .get();
         return doc.exists ? doc.data() : null;
       } catch (_) {
+        failures++;
         return null;
       }
     }
 
-    final dates = List.generate(
-        days, (i) => DateTime(today.year, today.month, today.day - i));
+    final dates = <DateTime>[];
+    for (var d = DateTime(to.year, to.month, to.day);
+        !d.isBefore(DateTime(from.year, from.month, from.day));
+        d = DateTime(d.year, d.month, d.day - 1)) {
+      dates.add(d); // الأحدث أولاً
+    }
     final results = await Future.wait(dates.map((d) async {
       final att = await read(_attendanceCollection, d);
       final hw = await read('homework', d);
@@ -641,7 +656,10 @@ class SyncService {
         homework: hw == null ? null : HomeworkRecord.fromMap(hw),
       );
     }));
-    return results.where((r) => r.attendance != null || r.homework != null).toList();
+    return (
+      records: results.where((r) => r.attendance != null || r.homework != null).toList(),
+      failures: failures,
+    );
   }
 
   // =================== اتصال الإنترنت ===================

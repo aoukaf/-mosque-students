@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -133,7 +134,8 @@ class _MosqueStudentsAppState extends State<MosqueStudentsApp> {
   void initState() {
     super.initState();
     final err = widget.authError;
-    if (err != null) {
+    if (err != null && kDebugMode) {
+      // تشخيص للمطوّر فقط (flutter run)، لا يظهر للمعلمين ولا لزوار الموقع
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _messengerKey.currentState?.showSnackBar(SnackBar(
           duration: const Duration(seconds: 30),
