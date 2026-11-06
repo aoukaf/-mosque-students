@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -9,8 +10,21 @@ const String _kVersionUrl =
     'https://raw.githubusercontent.com/ameralking888-maker/alpha-net-store/main/version.json';
 
 class UpdateService {
+  /// المصدر الأول: وثيقة Firestore `appConfig/version` (تصل للتطبيق والموقع بدون GitHub ولا VPN).
+  /// الحقول: version, web_version, download_url, notes, min_version, security_phase.
+  /// المصدر الاحتياطي (أندرويد فقط): version.json على GitHub، لتوافق النسخ القديمة.
   static Future<Map<String, dynamic>?> _fetch() async {
-    if (kIsWeb) return null; // Web updates automatically via Netlify
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('appConfig')
+          .doc('version')
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 8));
+      if (doc.exists && doc.data() != null) return doc.data();
+    } catch (_) {
+      // لا اتصال أو القواعد لا تسمح بعد: ننتقل للمصدر الاحتياطي
+    }
+    if (kIsWeb) return null; // الموقع يتحدّث بالنشر، ولا يملك dart:io للمصدر الاحتياطي
     try {
       final client = HttpClient();
       client.connectionTimeout = const Duration(seconds: 6);
@@ -29,8 +43,13 @@ class UpdateService {
   static Future<Map<String, dynamic>?> checkForUpdate() async {
     final data = await _fetch();
     if (data == null) return null;
-    final latest = (data['version'] as String?) ?? '';
-    return _isNewer(latest, _kCurrentVersion) ? data : null;
+    return _isNewer(_latestFor(data), _kCurrentVersion) ? data : null;
+  }
+
+  /// نسخة الموقع لها رقمها (web_version)، وتعود لـ version إن لم تُحدَّد.
+  static String _latestFor(Map<String, dynamic> data) {
+    final web = data['web_version'] as String?;
+    return (kIsWeb && web != null && web.isNotEmpty ? web : data['version'] as String?) ?? '';
   }
 
   /// مرحلة الأمان التي أعلنها version.json (1 = انتقالية، 2 = القواعد الصارمة).
@@ -57,7 +76,7 @@ class UpdateService {
     if (data == null) return;
     if (!context.mounted) return;
 
-    final version = data['version'] as String? ?? '';
+    final version = _latestFor(data);
     final downloadUrl = data['download_url'] as String? ?? '';
     final notes = data['notes'] as String? ?? '';
     // min_version: النسخ الأقدم منها لا يمكنها المتابعة بدون تحديث
@@ -114,11 +133,14 @@ class UpdateService {
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
-              icon: const Icon(Icons.download, size: 18),
-              label: const Text('تحميل التحديث'),
+              icon: const Icon(kIsWeb ? Icons.refresh : Icons.download, size: 18),
+              label: const Text(kIsWeb ? 'تحديث الآن' : 'تحميل التحديث'),
               onPressed: () async {
                 if (!forced) Navigator.pop(ctx);
-                if (downloadUrl.isNotEmpty) {
+                if (kIsWeb) {
+                  // إعادة تحميل الصفحة لجلب النسخة الجديدة (قد يلزم تحميلان بسبب تخزين المتصفح)
+                  await launchUrl(Uri.base, webOnlyWindowName: '_self');
+                } else if (downloadUrl.isNotEmpty) {
                   await launchUrl(Uri.parse(downloadUrl),
                       mode: LaunchMode.externalApplication);
                 }

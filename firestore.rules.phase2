@@ -108,6 +108,13 @@ service cloud.firestore {
       allow list, update: if false;
     }
 
+    // ───────── إعدادات التحديث: قراءة عامة لوثيقة واحدة (رقم النسخة ورابط التحميل فقط)، والكتابة من Console فقط ─────────
+
+    match /appConfig/{doc} {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
     // ───────── المساجد ─────────
 
     match /mosques/{mosqueId} {
