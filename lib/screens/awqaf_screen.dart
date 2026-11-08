@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/staff.dart';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
 import '../services/awqaf_vault.dart';
@@ -22,6 +23,9 @@ class _AwqafScreenState extends State<AwqafScreen> {
   StreamSubscription<List<MosqueInfo>>? _sub;
   List<MosqueInfo> _mosques = [];
   String _search = '';
+  final Map<String, StreamSubscription<List<StaffMember>>> _staffSubs = {};
+  final Map<String, List<StaffMember>> _staffByMosque = {};
+  final Set<String> _staffFailed = {};
 
   String _hashAwqaf(String pw) =>
       sha256.convert(utf8.encode('awqaf:$pw')).toString();
@@ -30,7 +34,11 @@ class _AwqafScreenState extends State<AwqafScreen> {
   void initState() {
     super.initState();
     _sub = _sync.watchAllMosques().listen(
-      (list) { if (mounted) setState(() => _mosques = list); },
+      (list) {
+        if (!mounted) return;
+        setState(() => _mosques = list);
+        _syncStaffSubs(list);
+      },
     );
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       // أول شي نفتح خزنة كلمات السر (إن كانت مقفلة بعد إعادة تشغيل التطبيق)، ثم نفحص التحديث
@@ -136,7 +144,37 @@ class _AwqafScreenState extends State<AwqafScreen> {
   @override
   void dispose() {
     _sub?.cancel();
+    for (final s in _staffSubs.values) {
+      s.cancel();
+    }
     super.dispose();
+  }
+
+  // ─── أعداد الكادر: نتابع كادر كل مسجد ونجمع الأعداد ───
+
+  void _syncStaffSubs(List<MosqueInfo> mosques) {
+    final ids = mosques.map((m) => m.id).toSet();
+    for (final id in _staffSubs.keys.where((k) => !ids.contains(k)).toList()) {
+      _staffSubs.remove(id)?.cancel();
+      _staffByMosque.remove(id);
+      _staffFailed.remove(id);
+    }
+    for (final id in ids) {
+      if (_staffSubs.containsKey(id)) continue;
+      _staffSubs[id] = _sync.watchStaff(mosqueId: id).listen(
+        (staff) {
+          if (mounted) setState(() { _staffByMosque[id] = staff; _staffFailed.remove(id); });
+        },
+        onError: (_) { if (mounted) setState(() => _staffFailed.add(id)); },
+      );
+    }
+  }
+
+  /// عدد أفراد صفة معيّنة بكل المساجد، أو "—" إذا تعذّرت قراءة الكادر بالكامل
+  String _staffStat(String role) {
+    if (_staffByMosque.isEmpty && _staffFailed.isNotEmpty) return '—';
+    final n = _staffByMosque.values.fold(0, (s, list) => s + list.where((m) => m.role == role).length);
+    return '$n';
   }
 
   Future<void> _changePassword() async {
@@ -300,12 +338,29 @@ class _AwqafScreenState extends State<AwqafScreen> {
             Container(
               color: Colors.amber.shade800,
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
+              child: Column(
                 children: [
-                  _Stat(icon: Icons.mosque, value: '${_mosques.length}', label: 'مسجد'),
-                  _Stat(icon: Icons.people, value: '$totalStudents', label: 'طالب'),
-                  _Stat(icon: Icons.menu_book, value: '$totalHalqas', label: 'حلقة'),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _Stat(icon: Icons.mosque, value: '${_mosques.length}', label: 'مسجد'),
+                      _Stat(icon: Icons.people, value: '$totalStudents', label: 'طالب'),
+                      _Stat(icon: Icons.menu_book, value: '$totalHalqas', label: 'حلقة'),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(color: Colors.white24, height: 1),
+                  const SizedBox(height: 12),
+                  // ─── أعداد الكادر في كل المساجد ───
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _Stat(icon: Icons.school, value: _staffStat(StaffRole.teacher), label: 'معلم'),
+                      _Stat(icon: Icons.support_agent, value: _staffStat(StaffRole.assistant), label: 'مساعد'),
+                      _Stat(icon: Icons.account_balance, value: _staffStat(StaffRole.mosqueSupervisor), label: 'مشرف مسجد'),
+                      _Stat(icon: Icons.supervisor_account, value: _staffStat(StaffRole.halqaSupervisor), label: 'مشرف حلقات'),
+                    ],
+                  ),
                 ],
               ),
             ),
