@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
+import '../utils/halqa_days.dart';
 import '../utils/responsive.dart';
 
 class HalqasScreen extends StatefulWidget {
@@ -16,6 +17,8 @@ class _HalqasScreenState extends State<HalqasScreen> {
   List<String> _halqas = [];
   bool _loading = true;
   StreamSubscription<List<String>>? _halqasSub;
+  StreamSubscription<Map<String, List<String>>>? _daysSub;
+  Map<String, List<String>> _days = {};
 
   @override
   void initState() {
@@ -26,12 +29,72 @@ class _HalqasScreenState extends State<HalqasScreen> {
       final local = await _sync.getHalqas();
       if (mounted) setState(() { _halqas = local; _loading = false; });
     });
+    _daysSub = _sync.watchHalqaDays().listen(
+      (m) { if (mounted) setState(() => _days = m); },
+      onError: (_) {},
+    );
   }
 
   @override
   void dispose() {
     _halqasSub?.cancel();
+    _daysSub?.cancel();
     super.dispose();
+  }
+
+  /// تحديد أيام دوام الحلقة: عليها يقتصر تسجيل الحضور والوظائف وتظهر عند الأوقاف
+  Future<void> _editDays(String halqa) async {
+    final selected = <String>{...(_days[halqa] ?? const <String>[])};
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: StatefulBuilder(
+          builder: (ctx, setLocal) => AlertDialog(
+            title: Text('أيام دوام "$halqa"'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final day in kWeekDays)
+                      FilterChip(
+                        label: Text(day, style: TextStyle(color: selected.contains(day) ? Colors.white : Colors.black87)),
+                        selected: selected.contains(day),
+                        selectedColor: AppTheme.primaryGreen,
+                        checkmarkColor: Colors.white,
+                        onSelected: (v) => setLocal(() => v ? selected.add(day) : selected.remove(day)),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'تسجيل الحضور والوظائف لهذه الحلقة بيظهر بهالأيام فقط. '
+                  'إذا ما اخترت أي يوم بتظهر كل الأيام.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, kWeekDays.where(selected.contains).toList()),
+                child: const Text('حفظ'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (result == null) return;
+    try {
+      await _sync.setHalqaDays(halqa, result);
+    } catch (_) {
+      if (mounted) _showError('تعذّر حفظ الأيام، تحقق من الاتصال');
+    }
   }
 
   Future<void> _addHalqa() async {
@@ -186,9 +249,16 @@ class _HalqasScreenState extends State<HalqasScreen> {
                               child: Text('${i + 1}', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: r.fontSize(14))),
                             ),
                             title: Text(halqa, style: TextStyle(fontSize: r.fontSize(r.isTablet ? 17 : 15), fontWeight: FontWeight.w600)),
+                            subtitle: Text('الدوام: ${halqaDaysLabel(_days[halqa] ?? const <String>[])}',
+                                style: TextStyle(fontSize: r.fontSize(12))),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
+                                IconButton(
+                                  icon: Icon(Icons.event_repeat, color: Colors.teal[700], size: r.iconSize(22)),
+                                  tooltip: 'أيام الدوام',
+                                  onPressed: () => _editDays(halqa),
+                                ),
                                 IconButton(
                                   icon: Icon(Icons.edit_outlined, color: AppTheme.primaryGreen, size: r.iconSize(22)),
                                   tooltip: 'تعديل الاسم',

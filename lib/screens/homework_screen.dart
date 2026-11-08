@@ -3,13 +3,21 @@ import 'package:flutter/material.dart';
 import '../models/student.dart';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
+import '../utils/halqa_days.dart';
 import '../utils/responsive.dart';
 
 class HomeworkScreen extends StatefulWidget {
   final List<Student> students;
   final List<String> halqas;
   final String? halqaName;
-  const HomeworkScreen({super.key, required this.students, required this.halqas, this.halqaName});
+  final List<String> halqaDays; // أيام دوام الحلقة (فارغة = كل الأيام)
+  const HomeworkScreen({
+    super.key,
+    required this.students,
+    required this.halqas,
+    this.halqaName,
+    this.halqaDays = const [],
+  });
 
   @override
   State<HomeworkScreen> createState() => _HomeworkScreenState();
@@ -17,7 +25,7 @@ class HomeworkScreen extends StatefulWidget {
 
 class _HomeworkScreenState extends State<HomeworkScreen> {
   final _sync = SyncService();
-  DateTime _selectedDate = _today();
+  late DateTime _selectedDate;
   Map<String, HomeworkRecord> _homework = {};
   StreamSubscription<Map<String, HomeworkRecord>>? _sub;
   bool _loading = true;
@@ -29,9 +37,13 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
 
   bool get _isToday => _selectedDate == _today();
 
+  bool get _hasNext => nextHalqaDay(_selectedDate, widget.halqaDays, _today()) != null;
+
   @override
   void initState() {
     super.initState();
+    // نبدأ بأحدث يوم دوام للحلقة (اليوم إن كان من أيامها)
+    _selectedDate = latestHalqaDay(_today(), widget.halqaDays);
     _listen();
   }
 
@@ -54,13 +66,17 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
   }
 
   void _prevDay() {
-    setState(() => _selectedDate = _selectedDate.subtract(const Duration(days: 1)));
+    final prev = prevHalqaDay(_selectedDate, widget.halqaDays);
+    if (prev.year < 2024) return;
+    setState(() => _selectedDate = prev);
     _listen();
   }
 
   void _nextDay() {
-    final next = _selectedDate.add(const Duration(days: 1));
-    if (!next.isAfter(_today())) { setState(() => _selectedDate = next); _listen(); }
+    final next = nextHalqaDay(_selectedDate, widget.halqaDays, _today());
+    if (next == null) return;
+    setState(() => _selectedDate = next);
+    _listen();
   }
 
   Future<void> _pickDate() async {
@@ -69,6 +85,8 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
       initialDate: _selectedDate,
       firstDate: DateTime(2024),
       lastDate: _today(),
+      // لا يُسمح إلا بأيام دوام الحلقة
+      selectableDayPredicate: (d) => isHalqaDay(d, widget.halqaDays),
       builder: (ctx, child) => Directionality(textDirection: TextDirection.rtl, child: child!),
     );
     if (picked != null && picked != _selectedDate) {
@@ -198,7 +216,9 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
     final r = Responsive(context);
     final grouped = _grouped();
     final total = widget.students.length;
-    final brought = _homework.values.where((v) => v.brought).length;
+    // نعدّ فقط طلاب هذه الحلقة (سجلات اليوم تشمل كل الحلقات، وإلا يطلع "ما جاب" بالسالب)
+    final ids = widget.students.map((s) => s.id).toSet();
+    final brought = _homework.entries.where((e) => ids.contains(e.key) && e.value.brought).length;
 
     return Scaffold(
       appBar: AppBar(
@@ -248,11 +268,20 @@ class _HomeworkScreenState extends State<HomeworkScreen> {
                       ),
                     ),
                     IconButton(
-                      icon: Icon(Icons.chevron_left, color: _isToday ? Colors.white30 : Colors.white, size: r.iconSize(30)),
-                      onPressed: _isToday ? null : _nextDay,
+                      icon: Icon(Icons.chevron_left, color: _hasNext ? Colors.white : Colors.white30, size: r.iconSize(30)),
+                      onPressed: _hasNext ? _nextDay : null,
                     ),
                   ],
                 ),
+                if (widget.halqaDays.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(top: r.sp(2)),
+                    child: Text(
+                      'أيام الحلقة: ${halqaDaysLabel(widget.halqaDays)}'
+                      '${isHalqaDay(_today(), widget.halqaDays) ? '' : '  •  اليوم ليس من أيام الحلقة'}',
+                      style: TextStyle(color: Colors.white70, fontSize: r.fontSize(11.5)),
+                    ),
+                  ),
                 SizedBox(height: r.sp(10)),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,

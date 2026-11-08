@@ -8,18 +8,15 @@ import '../models/sync_service.dart';
 import '../models/staff.dart';
 import '../models/student.dart';
 import '../models/app_theme.dart';
-import '../services/vault_crypto.dart';
+import '../services/awqaf_vault.dart';
+import '../utils/halqa_days.dart';
 
-String _awqafHash(String pw) => sha256.convert(utf8.encode('awqaf:$pw')).toString();
 String _mosqueHash(String id, String pw) => sha256.convert(utf8.encode('$id:$pw')).toString();
 
 String _formatId(String id) =>
     id.length == 12 ? '${id.substring(0, 4)}-${id.substring(4, 8)}-${id.substring(8)}' : id;
 
-/// كلمة سر الأوقاف تبقى بالذاكرة فقط أثناء تشغيل التطبيق (لفك الخزنة)، ولا تُكتب على القرص.
-class _AwqafSecret {
-  static String? password;
-}
+enum _VaultView { locked, loading, found, missing, error }
 
 class AwqafMosqueDetailScreen extends StatefulWidget {
   final MosqueInfo mosque;
@@ -35,13 +32,16 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
   StreamSubscription<List<String>>? _halqasSub;
   StreamSubscription<List<StaffMember>>? _staffSub;
   StreamSubscription<Map<String, StudentInfo>>? _infosSub;
+  StreamSubscription<Map<String, List<String>>>? _daysSub;
   List<Student> _students = [];
   List<String> _halqas = [];
   List<StaffMember> _staff = [];
   Map<String, StudentInfo> _infos = {};
+  Map<String, List<String>> _halqaDays = {};
   bool _staffError = false;
   bool _infosError = false;
-  String? _shownPassword;
+  String? _clearPassword;
+  _VaultView _vaultView = _VaultView.locked;
   bool _vaultBusy = false;
 
   @override
@@ -62,6 +62,11 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
       (map) { if (mounted) setState(() { _infos = map; _infosError = false; }); },
       onError: (_) { if (mounted) setState(() => _infosError = true); },
     );
+    _daysSub = _sync.watchHalqaDays(mosqueId: id).listen(
+      (m) { if (mounted) setState(() => _halqaDays = m); },
+      onError: (_) {},
+    );
+    _loadVault();
   }
 
   @override
@@ -70,6 +75,7 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
     _halqasSub?.cancel();
     _staffSub?.cancel();
     _infosSub?.cancel();
+    _daysSub?.cancel();
     super.dispose();
   }
 
@@ -102,88 +108,33 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
 
   // ───────── خزنة كلمة السر ─────────
 
-  /// يطلب كلمة سر الأوقاف (مرة واحدة لكل تشغيل) ويتحقق منها عبر السيرفر.
-  Future<String?> _ensureAwqafPassword() async {
-    if (_AwqafSecret.password != null) return _AwqafSecret.password;
-    final ctrl = TextEditingController();
-    final pw = await showDialog<String>(
-      context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          title: const Text('كلمة سر الأوقاف'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('مطلوبة لفك تشفير كلمات سر المساجد.', style: TextStyle(fontSize: 13)),
-              const SizedBox(height: 10),
-              TextField(
-                controller: ctrl,
-                obscureText: true,
-                autofocus: true,
-                decoration: const InputDecoration(hintText: 'كلمة السر'),
-                onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber.shade800),
-              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('تأكيد'),
-            ),
-          ],
-        ),
-      ),
-    );
-    ctrl.dispose();
-    if (pw == null || pw.isEmpty) return null;
-    bool ok;
-    try {
-      ok = await _sync.awqafLogin(_awqafHash(pw), migrate: false);
-    } catch (_) {
-      ok = false;
-    }
-    if (!ok) {
-      _toast('كلمة سر الأوقاف غير صحيحة', error: true);
-      return null;
-    }
-    _AwqafSecret.password = pw;
-    return pw;
-  }
-
-  Future<void> _revealPassword() async {
-    if (_shownPassword != null) {
-      setState(() => _shownPassword = null);
+  /// تُعرض كلمة السر بنص صريح تلقائياً متى كانت الخزنة مفتوحة
+  Future<void> _loadVault() async {
+    if (!AwqafVault.isUnlocked) {
+      if (mounted) setState(() => _vaultView = _VaultView.locked);
       return;
     }
-    final awqafPw = await _ensureAwqafPassword();
-    if (awqafPw == null) return;
-    setState(() => _vaultBusy = true);
+    if (mounted) setState(() => _vaultView = _VaultView.loading);
     try {
-      final blob = await _sync.getVaultBlob(widget.mosque.id);
-      if (blob == null) {
-        _toast('لم تُسجَّل كلمة سر هذا المسجد بعد. اضغط "تسجيل"');
-      } else {
-        final plain = await VaultCrypto.decrypt(blob, awqafPw);
-        if (plain == null) {
-          _AwqafSecret.password = null;
-          _toast('تعذّر فك التشفير: غالباً غُيّرت كلمة سر الأوقاف بعد التسجيل. سجّلها من جديد', error: true);
-        } else if (mounted) {
-          setState(() => _shownPassword = plain);
-        }
-      }
+      final p = await AwqafVault.readMosquePassword(widget.mosque.id);
+      if (!mounted) return;
+      setState(() {
+        _clearPassword = p;
+        _vaultView = p == null ? _VaultView.missing : _VaultView.found;
+      });
     } catch (_) {
-      _toast('تعذّر الاتصال بالخزنة، تأكد من الإنترنت وأنك داخل بجلسة الأوقاف', error: true);
+      if (mounted) setState(() => _vaultView = _VaultView.error);
     }
-    if (mounted) setState(() => _vaultBusy = false);
   }
 
+  Future<void> _unlock() async {
+    if (await AwqafVault.promptUnlock(context)) await _loadVault();
+  }
+
+  /// تسجيل يدوي لكلمة سر المسجد (للمساجد التي لم يدخل معلمها بعد بالنسخة الجديدة)
   Future<void> _savePassword() async {
-    final awqafPw = await _ensureAwqafPassword();
-    if (awqafPw == null || !mounted) return;
+    if (!AwqafVault.isUnlocked && !await AwqafVault.promptUnlock(context)) return;
+    if (!mounted) return;
 
     final ctrl = TextEditingController();
     final mosquePw = await showDialog<String>(
@@ -196,7 +147,7 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('تُحفظ مشفّرة ولا يراها غيرك.\n'
+              Text('تُحفظ مشفّرة، ولا يفكها إلا الأوقاف.\n'
                   'مسجد: ${widget.mosque.name.isNotEmpty ? widget.mosque.name : _formatId(widget.mosque.id)}',
                   style: const TextStyle(fontSize: 13)),
               const SizedBox(height: 10),
@@ -245,12 +196,9 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
 
     setState(() => _vaultBusy = true);
     try {
-      final blob = await VaultCrypto.encrypt(mosquePw, awqafPw);
-      await _sync.saveVaultBlob(widget.mosque.id, blob);
-      _toast(legacy == null
-          ? 'تم الحفظ (لم أستطع التحقق من صحة الكلمة)'
-          : 'تم الحفظ وتبيّن أن الكلمة صحيحة');
-      if (mounted) setState(() => _shownPassword = null);
+      await AwqafVault.storeMosquePassword(widget.mosque.id, mosquePw);
+      _toast(legacy == null ? 'تم الحفظ (لم أستطع التحقق من صحة الكلمة)' : 'تم الحفظ وتبيّن أن الكلمة صحيحة');
+      await _loadVault();
     } catch (_) {
       _toast('تعذّر الحفظ، تأكد من الاتصال وأنك داخل بجلسة الأوقاف', error: true);
     }
@@ -290,7 +238,7 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
                       const SizedBox(height: 12),
                       Row(
                         children: [
-                          _HStat(icon: Icons.people,    value: '${mosque.studentCount}', label: 'طالب'),
+                          _HStat(icon: Icons.people,    value: '${_students.length}', label: 'طالب'),
                           const SizedBox(width: 20),
                           _HStat(icon: Icons.menu_book, value: '${_halqas.length}',      label: 'حلقة'),
                           const SizedBox(width: 20),
@@ -317,10 +265,12 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
             SliverToBoxAdapter(
               child: _CredentialsCard(
                 mosqueId: mosque.id,
-                shownPassword: _shownPassword,
+                view: _vaultView,
+                password: _clearPassword,
                 busy: _vaultBusy,
-                onReveal: _revealPassword,
+                onUnlock: _unlock,
                 onSave: _savePassword,
+                onRetry: _loadVault,
                 onCopy: (text, what) {
                   Clipboard.setData(ClipboardData(text: text));
                   _toast('تم نسخ $what');
@@ -371,7 +321,13 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
                         .where((s) => StaffRole.hasHalqa(s.role) && s.halqa == halqa)
                         .map((s) => s.fullName)
                         .toList();
-                    return _HalqaCard(halqa: halqa, students: students, infos: _infos, teachers: teachers);
+                    return _HalqaCard(
+                      halqa: halqa,
+                      students: students,
+                      infos: _infos,
+                      teachers: teachers,
+                      days: _halqaDays[halqa] ?? const [],
+                    );
                   },
                   childCount: grouped.length,
                 ),
@@ -388,18 +344,22 @@ class _AwqafMosqueDetailScreenState extends State<AwqafMosqueDetailScreen> {
 
 class _CredentialsCard extends StatelessWidget {
   final String mosqueId;
-  final String? shownPassword;
+  final _VaultView view;
+  final String? password;
   final bool busy;
-  final VoidCallback onReveal;
+  final VoidCallback onUnlock;
   final VoidCallback onSave;
+  final VoidCallback onRetry;
   final void Function(String text, String what) onCopy;
 
   const _CredentialsCard({
     required this.mosqueId,
-    required this.shownPassword,
+    required this.view,
+    required this.password,
     required this.busy,
-    required this.onReveal,
+    required this.onUnlock,
     required this.onSave,
+    required this.onRetry,
     required this.onCopy,
   });
 
@@ -438,52 +398,79 @@ class _CredentialsCard extends StatelessWidget {
               ),
             ],
           ),
-          Row(
-            children: [
-              Text('كلمة السر: ', style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
-              Expanded(
-                child: Text(shownPassword ?? '••••••••',
-                    textDirection: TextDirection.ltr,
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        letterSpacing: shownPassword == null ? 3 : 1)),
-              ),
-              if (shownPassword != null)
-                IconButton(
-                  icon: const Icon(Icons.copy, size: 18),
-                  tooltip: 'نسخ كلمة السر',
-                  onPressed: () => onCopy(shownPassword!, 'كلمة السر'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              OutlinedButton.icon(
-                onPressed: busy ? null : onReveal,
-                icon: Icon(shownPassword == null ? Icons.visibility : Icons.visibility_off, size: 18),
-                label: Text(shownPassword == null ? 'عرض' : 'إخفاء'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: busy ? null : onSave,
-                icon: const Icon(Icons.save_outlined, size: 18),
-                label: const Text('تسجيل / تعديل'),
-              ),
-              if (busy) ...[
-                const SizedBox(width: 12),
-                const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-              ],
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text('كلمات السر مشفّرة ولا تُعرض إلا بعد إدخال كلمة سر الأوقاف.',
-              style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
+          _passwordRow(),
         ],
       ),
     );
+  }
+
+  Widget _passwordRow() {
+    final label = Text('كلمة السر: ', style: TextStyle(color: Colors.grey.shade700, fontSize: 13));
+    switch (view) {
+      case _VaultView.loading:
+        return Row(children: [
+          label,
+          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+        ]);
+      case _VaultView.found:
+        return Row(children: [
+          label,
+          Expanded(
+            child: SelectableText(password ?? '',
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 1)),
+          ),
+          IconButton(
+            icon: const Icon(Icons.copy, size: 18),
+            tooltip: 'نسخ كلمة السر',
+            onPressed: () => onCopy(password ?? '', 'كلمة السر'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            tooltip: 'تسجيل كلمة جديدة',
+            onPressed: busy ? null : onSave,
+          ),
+        ]);
+      case _VaultView.missing:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              label,
+              Text('غير مسجّلة بعد', style: TextStyle(color: Colors.orange.shade800, fontWeight: FontWeight.w600)),
+            ]),
+            const SizedBox(height: 4),
+            Text('تُسجَّل تلقائياً أول ما يدخل معلم المسجد بالنسخة الجديدة، أو سجّلها بنفسك.',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 11.5)),
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              onPressed: busy ? null : onSave,
+              icon: const Icon(Icons.save_outlined, size: 18),
+              label: const Text('تسجيل كلمة السر'),
+            ),
+          ],
+        );
+      case _VaultView.error:
+        return Row(children: [
+          label,
+          Expanded(child: Text('تعذّر القراءة', style: TextStyle(color: Colors.red.shade700, fontSize: 13))),
+          TextButton(onPressed: onRetry, child: const Text('إعادة')),
+        ]);
+      case _VaultView.locked:
+        return Row(children: [
+          label,
+          Text('مقفلة 🔒', style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w600)),
+          const Spacer(),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber.shade800, foregroundColor: Colors.white),
+            onPressed: onUnlock,
+            icon: const Icon(Icons.lock_open, size: 18),
+            label: const Text('فتح'),
+          ),
+        ]);
+    }
   }
 }
 
@@ -640,7 +627,14 @@ class _HalqaCard extends StatelessWidget {
   final List<Student> students;
   final Map<String, StudentInfo> infos;
   final List<String> teachers;
-  const _HalqaCard({required this.halqa, required this.students, required this.infos, required this.teachers});
+  final List<String> days; // أيام دوام الحلقة
+  const _HalqaCard({
+    required this.halqa,
+    required this.students,
+    required this.infos,
+    required this.teachers,
+    required this.days,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -672,6 +666,15 @@ class _HalqaCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Row(children: [
+                    Icon(Icons.event_repeat, size: 13, color: Colors.teal.shade600),
+                    const SizedBox(width: 4),
+                    Text('الدوام: ${halqaDaysLabel(days)}',
+                        style: TextStyle(fontSize: 12, color: Colors.teal.shade700, fontWeight: FontWeight.w600)),
+                  ]),
+                ),
                 if (teachers.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),

@@ -212,9 +212,21 @@ service cloud.firestore {
 
     // ───────── خزنة الأوقاف: كلمات سر المساجد مشفّرة (AES-GCM بمفتاح من كلمة سر الأوقاف) ─────────
 
+    // مفتاح الأوقاف العام: يقرؤه تطبيق المعلم ليشفّر به كلمة سر مسجده (لا سر فيه)، ولا يكتبه إلا الأوقاف
+    match /awqaf/vaultKey {
+      allow get: if signedIn();
+      allow create, update: if isAwqaf()
+          && request.resource.data.keys().hasOnly(['pub'])
+          && request.resource.data.pub is string
+          && request.resource.data.pub.size() < 100;
+      allow list, delete: if false;
+    }
+
+    // كلمة سر كل مسجد مشفّرة بالمفتاح العام: يكتبها معلم المسجد (تلقائياً) أو الأوقاف، وتقرؤها الأوقاف فقط.
+    // الوثيقة `_key` فيها المفتاح الخاص مغلّفاً بكلمة سر الأوقاف (لا يصلها إلا الأوقاف).
     match /awqafVault/{mosqueId} {
       allow read, delete: if isAwqaf();
-      allow create, update: if isAwqaf()
+      allow create, update: if (isAwqaf() || isTeacher(mosqueId))
           && request.resource.data.keys().hasOnly(['blob'])
           && request.resource.data.blob is string
           && request.resource.data.blob.size() < 2000;

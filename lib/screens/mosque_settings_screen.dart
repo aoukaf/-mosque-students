@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'dart:convert';
@@ -123,6 +124,10 @@ class _MosqueSettingsScreenState extends State<MosqueSettingsScreen> {
         eveningFrom: _eveningFrom != null ? _formatTime(_eveningFrom!) : null,
         eveningTo:   _eveningTo   != null ? _formatTime(_eveningTo!)   : null,
       );
+      // كلمة سر جديدة: نسخة مشفّرة للأوقاف (لا يفكها غيرهم)
+      if (pw.isNotEmpty) {
+        unawaited(_sync.uploadMosquePasswordToVault(_sync.currentMosqueId ?? '', pw));
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('تم الحفظ بنجاح'), backgroundColor: Colors.green),

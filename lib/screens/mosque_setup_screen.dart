@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +7,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
+import '../services/awqaf_vault.dart';
 import 'home_screen.dart';
 import 'awqaf_screen.dart';
 import 'parent_screen.dart';
@@ -172,6 +174,10 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
       await _resetLockState();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(SyncService.userRoleKey, 'awqaf');
+      // نفتح خزنة كلمات سر المساجد الآن، لتظهر كل الكلمات فور دخول الأوقاف
+      try {
+        await AwqafVault.unlock(pw).timeout(const Duration(seconds: 25));
+      } catch (_) {}
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const AwqafScreen()),
@@ -274,6 +280,7 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
       final id = _generateMosqueId();
       await SyncService().createMosque(id, _hashPassword(id, pw), name);
       SyncService().initialize(id);
+      unawaited(SyncService().uploadMosquePasswordToVault(id, pw)); // نسخة مشفّرة للأوقاف
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(SyncService.mosqueIdKey, id);
       setState(() {
@@ -339,6 +346,7 @@ class _MosqueSetupScreenState extends State<MosqueSetupScreen> {
       }
       await _resetLockState();
       SyncService().initialize(raw);
+      unawaited(SyncService().uploadMosquePasswordToVault(raw, pw)); // نسخة مشفّرة للأوقاف
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(SyncService.mosqueIdKey, raw);
       if (mounted) {

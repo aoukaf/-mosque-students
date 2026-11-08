@@ -40,6 +40,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _sync.reconcileCounters(); // تصحيح عدّادات الطلاب والحلقات التي يراها الأوقاف
     _listenToData();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       UpdateService.checkAndPrompt(context);
@@ -189,8 +190,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: AppTheme.primaryGreen,
                   students: _students,
                   halqas: _halqas,
-                  builder: (name, list, halqas) =>
-                      AttendanceScreen(students: list, halqas: halqas, halqaName: name),
+                  builder: (name, list, halqas, days) => AttendanceScreen(
+                      students: list, halqas: halqas, halqaName: name, halqaDays: days),
                 ))),
           ),
           IconButton(
@@ -202,8 +203,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: const Color(0xFF5C4A8F),
                   students: _students,
                   halqas: _halqas,
-                  builder: (name, list, halqas) =>
-                      HomeworkScreen(students: list, halqas: halqas, halqaName: name),
+                  builder: (name, list, halqas, days) => HomeworkScreen(
+                      students: list, halqas: halqas, halqaName: name, halqaDays: days),
                 ))),
           ),
           IconButton(

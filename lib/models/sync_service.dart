@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import '../services/vault_crypto.dart';
 import 'staff.dart';
 import 'student.dart';
 
@@ -38,8 +39,8 @@ class MosqueInfo {
     return MosqueInfo(
       id: doc.id,
       name: data['name'] as String? ?? '',
-      studentCount: (data['studentCount'] as num?)?.toInt() ?? 0,
-      halqaCount: (data['halqaCount'] as num?)?.toInt() ?? 0,
+      studentCount: max(0, (data['studentCount'] as num?)?.toInt() ?? 0),
+      halqaCount: max(0, (data['halqaCount'] as num?)?.toInt() ?? 0),
       scheduleType: data['scheduleType'] as String? ?? 'yearRound',
       days: (data['days'] as List?)?.cast<String>() ?? [],
       morningFrom: data['morningFrom'] as String?,
@@ -604,6 +605,38 @@ class SyncService {
   Future<void> saveVaultBlob(String mosqueId, String blob) =>
       _vaultRef(mosqueId).set({'blob': blob});
 
+  // مفتاح الأوقاف العام (يقرؤه تطبيق المعلم ليشفّر به)، والخاص مشفّر بكلمة سر الأوقاف بوثيقة `_key`
+
+  DocumentReference<Map<String, dynamic>> get _vaultPubRef =>
+      _db.collection(_awqafCollection).doc('vaultKey');
+
+  Future<String?> getVaultPublicKey() async {
+    final doc = await _vaultPubRef.get();
+    return doc.data()?['pub'] as String?;
+  }
+
+  Future<String?> getWrappedVaultPrivate() => getVaultBlob('_key');
+
+  Future<void> saveVaultKeys({required String pub, required String wrappedPrivate}) async {
+    final batch = _db.batch();
+    batch.set(_vaultPubRef, {'pub': pub});
+    batch.set(_vaultRef('_key'), {'blob': wrappedPrivate});
+    await batch.commit();
+  }
+
+  Future<void> saveWrappedVaultPrivate(String wrapped) => _vaultRef('_key').set({'blob': wrapped});
+
+  /// يشفّر كلمة سر المسجد بمفتاح الأوقاف العام ويخزّنها، ليراها الأوقاف تلقائياً.
+  /// أفضل جهد: لا يوقف أي عملية بالتطبيق إن فشل (مثلاً لم تُجهَّز خزنة الأوقاف بعد).
+  Future<void> uploadMosquePasswordToVault(String mosqueId, String plainPassword) async {
+    try {
+      final pub = await getVaultPublicKey().timeout(_netTimeout);
+      if (pub == null) return;
+      final blob = await VaultCrypto.seal(plainPassword, pub);
+      await _vaultRef(mosqueId).set({'blob': blob}).timeout(_netTimeout);
+    } catch (_) {}
+  }
+
   /// هاش كلمة سر المسجد المقروء علناً (قبل المرحلة 2 فقط)، للتحقق من كلمة سر مُدخلة
   Future<String?> legacyMosqueHashOf(String mosqueId) async {
     try {
@@ -824,6 +857,22 @@ class SyncService {
     }
   }
 
+  /// يصحّح عدّادات المسجد (عدد الطلاب والحلقات) حسب العدد الحقيقي بالسيرفر.
+  /// العدّادات تُحدَّث بالزيادة والنقصان فتنحرف أحياناً (وقد تصير سالبة عند الأوقاف). أفضل جهد.
+  Future<void> reconcileCounters() async {
+    try {
+      final students = (await _studentsRef.count().get().timeout(_netTimeout)).count;
+      final halqas = (await _halqasRef.count().get().timeout(_netTimeout)).count;
+      if (students == null || halqas == null) return;
+      final doc = await _mosqueRef.get();
+      final d = doc.data() ?? {};
+      final upd = <String, dynamic>{};
+      if ((d['studentCount'] as num?)?.toInt() != students) upd['studentCount'] = students;
+      if ((d['halqaCount'] as num?)?.toInt() != halqas) upd['halqaCount'] = halqas;
+      if (upd.isNotEmpty) await _mosqueRef.update(upd);
+    } catch (_) {}
+  }
+
   Future<void> addStudent(Student student) async {
     final data = student.toMap();
     data.remove('id');
@@ -884,14 +933,40 @@ class SyncService {
   // اسم الحلقة هو معرّف الوثيقة، فإعادة التسمية = نسخ + نقل الطلاب + حذف القديمة
   Future<void> renameHalqa(String oldName, String newName) async {
     final snap = await _studentsRef.where('halqa', isEqualTo: oldName).get();
+    final oldDoc = await _halqasRef.doc(oldName).get();
+    final days = (oldDoc.data()?['days'] as List?)?.cast<String>() ?? const <String>[];
     final batch = _db.batch();
-    batch.set(_halqasRef.doc(newName), {'name': newName, 'createdAt': FieldValue.serverTimestamp()});
+    batch.set(_halqasRef.doc(newName), {
+      'name': newName,
+      'createdAt': FieldValue.serverTimestamp(),
+      if (days.isNotEmpty) 'days': days, // لا نضيّع أيام الدوام عند إعادة التسمية
+    });
     for (final doc in snap.docs) {
       batch.update(doc.reference, {'halqa': newName});
     }
     batch.delete(_halqasRef.doc(oldName));
     await batch.commit();
+    // ربط معلمي هذه الحلقة بالاسم الجديد (لا يفشل التعديل إن لم تتوفر جلسة)
+    try {
+      final staff = await _staffRefOf(_mosqueId!).where('halqa', isEqualTo: oldName).get();
+      for (final d in staff.docs) {
+        await d.reference.update({'halqa': newName});
+      }
+    } catch (_) {}
   }
+
+  // =================== أيام دوام الحلقة ===================
+
+  /// أيام دوام كل حلقة: اسم الحلقة ← قائمة أيام (فارغة = لم تُحدَّد). بدون وسيط = مسجد هذا الجهاز.
+  Stream<Map<String, List<String>>> watchHalqaDays({String? mosqueId}) {
+    final ref = mosqueId == null ? _halqasRef : _halqasRefOf(mosqueId);
+    return ref.snapshots().map((snap) => {
+          for (final d in snap.docs) d.id: ((d.data()['days'] as List?)?.cast<String>() ?? <String>[])
+        });
+  }
+
+  Future<void> setHalqaDays(String halqa, List<String> days) =>
+      _halqasRef.doc(halqa).set({'days': days}, SetOptions(merge: true));
 
   Future<bool> halqaExists(String name) async {
     final doc = await _halqasRef.doc(name).get();

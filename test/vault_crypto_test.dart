@@ -27,6 +27,38 @@ void main() {
     });
   });
 
+  group('VaultCrypto sealed box (مفتاح عام)', () {
+    test('تشفير بالعام وفك بالخاص', () async {
+      final kp = await VaultCrypto.generateKeyPair();
+      final sealed = await VaultCrypto.seal('كلمة سر مسجد 456', kp.pub);
+      expect(sealed.contains('كلمة'), isFalse);
+      expect(await VaultCrypto.open(sealed, kp.priv, kp.pub), 'كلمة سر مسجد 456');
+    });
+
+    test('مفتاح خاص مختلف لا يفك', () async {
+      final a = await VaultCrypto.generateKeyPair();
+      final b = await VaultCrypto.generateKeyPair();
+      final sealed = await VaultCrypto.seal('secret', a.pub);
+      expect(await VaultCrypto.open(sealed, b.priv, b.pub), isNull);
+    });
+
+    test('المفتاح الخاص يُحمى بكلمة سر ثم يُفتح ويفك', () async {
+      final kp = await VaultCrypto.generateKeyPair();
+      final wrapped = await VaultCrypto.encrypt(kp.priv, 'awqaf-pw');
+      final priv = await VaultCrypto.decrypt(wrapped, 'awqaf-pw');
+      expect(priv, kp.priv);
+      final sealed = await VaultCrypto.seal('mosque-pw', kp.pub);
+      expect(await VaultCrypto.open(sealed, priv!, kp.pub), 'mosque-pw');
+      expect(await VaultCrypto.decrypt(wrapped, 'bad'), isNull);
+    });
+
+    test('بيانات تالفة ترجع null', () async {
+      final kp = await VaultCrypto.generateKeyPair();
+      expect(await VaultCrypto.open('x', kp.priv, kp.pub), isNull);
+      expect(await VaultCrypto.open('{"v":2}', kp.priv, kp.pub), isNull);
+    });
+  });
+
   group('StaffMember', () {
     test('toMap/fromMap يحافظان على القيم، وعدد المحفوظات فقط لغير الخاتم', () {
       const none = StaffMember(

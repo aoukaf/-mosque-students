@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
+import '../services/awqaf_vault.dart';
 import '../services/update_service.dart';
 import 'mosque_setup_screen.dart';
 import 'awqaf_mosque_detail_screen.dart';
@@ -31,8 +32,10 @@ class _AwqafScreenState extends State<AwqafScreen> {
     _sub = _sync.watchAllMosques().listen(
       (list) { if (mounted) setState(() => _mosques = list); },
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      UpdateService.checkAndPrompt(context);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // أول شي نفتح خزنة كلمات السر (إن كانت مقفلة بعد إعادة تشغيل التطبيق)، ثم نفحص التحديث
+      if (!AwqafVault.isUnlocked) await AwqafVault.promptUnlock(context);
+      if (mounted) UpdateService.checkAndPrompt(context);
     });
   }
 
@@ -169,6 +172,10 @@ class _AwqafScreenState extends State<AwqafScreen> {
 
               final result = await _sync.awqafChangePassword(_hashAwqaf(oldPw), _hashAwqaf(newPw));
               if (result == AwqafChangeResult.ok) {
+                // مفتاح الخزنة الخاص مغلّف بكلمة السر القديمة: نعيد تغليفه بالجديدة حتى تبقى الكلمات ظاهرة
+                try {
+                  await AwqafVault.rewrap(oldPw, newPw);
+                } catch (_) {}
                 if (ctx.mounted) Navigator.pop(ctx, true);
                 return;
               }
@@ -245,6 +252,7 @@ class _AwqafScreenState extends State<AwqafScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(SyncService.userRoleKey);
     await _sync.clearSessionMarker();
+    AwqafVault.lock();
     if (mounted) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const MosqueSetupScreen()),
