@@ -747,11 +747,14 @@ class _StudentRow extends StatelessWidget {
               children: [
                 Text(student.name,
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                if (extra.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(extra.join('  •  '),
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                ],
+                const SizedBox(height: 2),
+                Text(
+                  extra.isNotEmpty ? extra.join('  •  ') : 'الصف والهاتف: غير مسجّلة بعد',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: extra.isNotEmpty ? Colors.grey.shade700 : Colors.grey.shade400,
+                  ),
+                ),
                 const SizedBox(height: 5),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),

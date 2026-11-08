@@ -9,6 +9,7 @@ import '../widgets/student_card.dart';
 import '../widgets/sync_status_bar.dart';
 import '../widgets/alphanet_branding.dart';
 import '../services/update_service.dart';
+import '../services/vault_prompt.dart';
 import 'add_edit_student_screen.dart';
 import 'student_detail_screen.dart';
 import 'halqas_screen.dart';
@@ -42,6 +43,11 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _sync.reconcileCounters(); // تصحيح عدّادات الطلاب والحلقات التي يراها الأوقاف
     _listenToData();
+    // بعد التحديث نطلب من المعلم مرة واحدة كلمة سر مسجده لتُحفظ نسخة مشفّرة للأوقاف
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future.delayed(const Duration(seconds: 3));
+      if (mounted) VaultPrompt.maybeAsk(context);
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       UpdateService.checkAndPrompt(context);
     });

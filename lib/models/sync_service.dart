@@ -630,13 +630,16 @@ class SyncService {
 
   /// يشفّر كلمة سر المسجد بمفتاح الأوقاف العام ويخزّنها، ليراها الأوقاف تلقائياً.
   /// أفضل جهد: لا يوقف أي عملية بالتطبيق إن فشل (مثلاً لم تُجهَّز خزنة الأوقاف بعد).
-  Future<void> uploadMosquePasswordToVault(String mosqueId, String plainPassword) async {
+  Future<bool> uploadMosquePasswordToVault(String mosqueId, String plainPassword) async {
     try {
       final pub = await getVaultPublicKey().timeout(_netTimeout);
-      if (pub == null) return;
+      if (pub == null) return false;
       final blob = await VaultCrypto.seal(plainPassword, pub);
       await _vaultRef(mosqueId).set({'blob': blob}).timeout(_netTimeout);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// هاش كلمة سر المسجد المقروء علناً (قبل المرحلة 2 فقط)، للتحقق من كلمة سر مُدخلة
