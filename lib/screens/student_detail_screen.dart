@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../models/staff.dart';
 import '../models/student.dart';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
@@ -55,6 +56,8 @@ class _PhoneDetail extends StatelessWidget {
         SizedBox(height: r.sp(14)),
         _ArchiveCard(student: student, r: r),
         SizedBox(height: r.sp(14)),
+        _StudentInfoCard(student: student, r: r),
+        SizedBox(height: r.sp(14)),
         _ParentCodeCard(student: student, r: r),
         SizedBox(height: r.sp(14)),
         Row(
@@ -101,6 +104,8 @@ class _TabletDetail extends StatelessWidget {
               _HeaderCard(student: student, r: r),
               SizedBox(height: r.sp(16)),
               _ArchiveCard(student: student, r: r),
+              SizedBox(height: r.sp(16)),
+              _StudentInfoCard(student: student, r: r),
               SizedBox(height: r.sp(16)),
               _ParentCodeCard(student: student, r: r),
               SizedBox(height: r.sp(16)),
@@ -222,6 +227,130 @@ class _ArchiveCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// معلومات الطالب الإضافية (هاتف وصف). محمية: تظهر لمعلم المسجد والأوقاف فقط.
+class _StudentInfoCard extends StatelessWidget {
+  final Student student;
+  final Responsive r;
+  const _StudentInfoCard({required this.student, required this.r});
+
+  Future<void> _edit(BuildContext context, StudentInfo current) async {
+    final phoneCtrl = TextEditingController(text: current.phone);
+    final gradeCtrl = TextEditingController(text: current.grade);
+    final saved = await showDialog<StudentInfo>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('معلومات الطالب'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: phoneCtrl,
+              keyboardType: TextInputType.phone,
+              textDirection: TextDirection.ltr,
+              maxLength: 25,
+              decoration: const InputDecoration(labelText: 'رقم الهاتف'),
+            ),
+            TextField(
+              controller: gradeCtrl,
+              maxLength: 60,
+              decoration: const InputDecoration(labelText: 'الصف', hintText: 'مثال: الخامس'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(
+                ctx, StudentInfo(phone: phoneCtrl.text.trim(), grade: gradeCtrl.text.trim())),
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+    phoneCtrl.dispose();
+    gradeCtrl.dispose();
+    if (saved == null) return;
+    try {
+      await SyncService().saveStudentInfo(student.id, saved);
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('تعذّر الحفظ. تأكد من الاتصال، وإذا استمرت المشكلة اخرج من التطبيق وادخل من جديد'),
+            backgroundColor: Colors.red[700],
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<StudentInfo?>(
+      stream: SyncService().watchStudentInfo(student.id),
+      builder: (context, snap) {
+        final info = snap.data ?? const StudentInfo();
+        return Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r.cardBorderRadius)),
+          child: Padding(
+            padding: r.cardPadding,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.contact_phone, color: AppTheme.primaryGreen, size: r.iconSize(22)),
+                    SizedBox(width: r.sp(8)),
+                    Expanded(
+                      child: Text('معلومات الطالب',
+                          style: TextStyle(
+                              fontSize: r.fontSize(15), fontWeight: FontWeight.bold, color: AppTheme.primaryGreen)),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.edit_outlined),
+                      tooltip: 'تعديل',
+                      onPressed: snap.hasError ? null : () => _edit(context, info),
+                    ),
+                  ],
+                ),
+                SizedBox(height: r.sp(6)),
+                if (snap.hasError)
+                  Text('تعذّر تحميل المعلومات. اخرج من التطبيق وادخل من جديد.',
+                      style: TextStyle(fontSize: r.fontSize(12), color: Colors.red[700]))
+                else ...[
+                  _row('الاسم الثلاثي', student.name),
+                  _row('رقم الهاتف', info.phone.isEmpty ? 'غير مسجّل' : info.phone, dim: info.phone.isEmpty),
+                  _row('الصف', info.grade.isEmpty ? 'غير مسجّل' : info.grade, dim: info.grade.isEmpty),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _row(String label, String value, {bool dim = false}) => Padding(
+        padding: EdgeInsets.symmetric(vertical: r.sp(3)),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: r.sp(100),
+              child: Text(label, style: TextStyle(fontSize: r.fontSize(13), color: Colors.grey[700])),
+            ),
+            Expanded(
+              child: Text(value,
+                  style: TextStyle(
+                      fontSize: r.fontSize(14),
+                      fontWeight: FontWeight.w600,
+                      color: dim ? Colors.grey[500] : null)),
+            ),
+          ],
+        ),
+      );
 }
 
 class _ParentCodeCard extends StatefulWidget {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import '../models/sync_service.dart';
 import '../models/app_theme.dart';
+import 'staff_screen.dart';
 
 class MosqueSettingsScreen extends StatefulWidget {
   const MosqueSettingsScreen({super.key});
@@ -155,6 +156,21 @@ class _MosqueSettingsScreenState extends State<MosqueSettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // ─── المعلمون والمشرفون ───
+                    Card(
+                      margin: EdgeInsets.zero,
+                      child: ListTile(
+                        leading: const Icon(Icons.badge, color: AppTheme.primaryGreen),
+                        title: const Text('المعلمون والمشرفون',
+                            style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primaryGreen)),
+                        subtitle: const Text('بيانات المعلم والمعلم المساعد ومشرف المسجد ومشرف الحلقات'),
+                        trailing: const Icon(Icons.chevron_left),
+                        onTap: () => Navigator.push(
+                            context, MaterialPageRoute(builder: (_) => const StaffScreen())),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
                     // ─── اسم المسجد ───
                     const _SectionTitle('اسم المسجد'),
                     const SizedBox(height: 8),

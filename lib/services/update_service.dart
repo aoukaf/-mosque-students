@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-const String _kCurrentVersion = '1.1.0';
+const String _kCurrentVersion = '1.2.0';
 const String _kVersionUrl =
     'https://raw.githubusercontent.com/ameralking888-maker/alpha-net-store/main/version.json';
 

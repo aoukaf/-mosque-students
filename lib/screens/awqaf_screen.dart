@@ -136,6 +136,111 @@ class _AwqafScreenState extends State<AwqafScreen> {
     super.dispose();
   }
 
+  Future<void> _changePassword() async {
+    final oldCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? error;
+    bool busy = false;
+
+    final done = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: StatefulBuilder(
+          builder: (ctx, setLocal) {
+            InputDecoration deco(String hint) => InputDecoration(
+                  hintText: hint,
+                  filled: true,
+                  fillColor: Colors.grey.shade50,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                );
+
+            Future<void> submit() async {
+              final oldPw = oldCtrl.text.trim();
+              final newPw = newCtrl.text.trim();
+              if (oldPw.isEmpty) return setLocal(() => error = 'أدخل كلمة السر الحالية');
+              if (newPw.length < 8) return setLocal(() => error = 'كلمة السر الجديدة 8 أحرف على الأقل');
+              if (newPw == oldPw) return setLocal(() => error = 'الجديدة مطابقة للحالية');
+              if (newPw != confirmCtrl.text.trim()) return setLocal(() => error = 'كلمتا السر غير متطابقتين');
+              setLocal(() { error = null; busy = true; });
+
+              final result = await _sync.awqafChangePassword(_hashAwqaf(oldPw), _hashAwqaf(newPw));
+              if (result == AwqafChangeResult.ok) {
+                if (ctx.mounted) Navigator.pop(ctx, true);
+                return;
+              }
+              setLocal(() {
+                busy = false;
+                error = switch (result) {
+                  AwqafChangeResult.wrongOld => 'كلمة السر الحالية غير صحيحة',
+                  AwqafChangeResult.unsupported =>
+                    'لا يمكن التغيير من هذا الجهاز. اخرج وسجّل الدخول من جديد ثم أعد المحاولة',
+                  AwqafChangeResult.noIdentity => 'تعذّر الاتصال بالخدمة، تحقق من الإنترنت',
+                  _ => 'تعذّر الحفظ، تحقق من الاتصال وأعد المحاولة',
+                };
+              });
+            }
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text('تغيير كلمة سر الأوقاف'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(controller: oldCtrl, obscureText: true, decoration: deco('كلمة السر الحالية')),
+                    const SizedBox(height: 10),
+                    TextField(controller: newCtrl, obscureText: true, decoration: deco('الجديدة (8 أحرف أو أكثر)')),
+                    const SizedBox(height: 10),
+                    TextField(controller: confirmCtrl, obscureText: true, decoration: deco('تأكيد الجديدة')),
+                    if (error != null) ...[
+                      const SizedBox(height: 10),
+                      Text(error!, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
+                    ],
+                    const SizedBox(height: 8),
+                    Text('بعد التغيير تحتاج الأجهزة الأخرى لتسجيل دخول جديد.',
+                        style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: busy ? null : () => Navigator.pop(ctx, false),
+                  child: const Text('إلغاء'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber.shade800,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: busy ? null : submit,
+                  child: busy
+                      ? const SizedBox(
+                          width: 18, height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('حفظ'),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    oldCtrl.dispose();
+    newCtrl.dispose();
+    confirmCtrl.dispose();
+
+    if (done == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تغيير كلمة سر الأوقاف'), backgroundColor: Colors.green),
+      );
+    }
+  }
+
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(SyncService.userRoleKey);
@@ -169,6 +274,11 @@ class _AwqafScreenState extends State<AwqafScreen> {
           foregroundColor: Colors.white,
           title: const Text('لوحة الأوقاف', style: TextStyle(fontWeight: FontWeight.bold)),
           actions: [
+            IconButton(
+              icon: const Icon(Icons.lock_reset),
+              tooltip: 'تغيير كلمة السر',
+              onPressed: _changePassword,
+            ),
             IconButton(
               icon: const Icon(Icons.logout),
               tooltip: 'خروج',

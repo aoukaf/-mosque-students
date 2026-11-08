@@ -1,7 +1,7 @@
 name: mosque_students
 description: تطبيق سجلات طلاب المسجد
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -21,6 +21,7 @@ dependencies:
   connectivity_plus: ^6.0.3
   uuid: ^4.4.0
   crypto: ^3.0.3
+  cryptography: ^2.7.0 # تشفير خزنة كلمات سر المساجد (AES-GCM + PBKDF2)
   url_launcher: ^6.3.0
 
 dev_dependencies:

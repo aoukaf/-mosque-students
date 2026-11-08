@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'staff.dart';
 import 'student.dart';
 
 class MosqueInfo {
@@ -47,6 +48,15 @@ class MosqueInfo {
       eveningTo: data['eveningTo'] as String?,
     );
   }
+}
+
+/// نتيجة تغيير كلمة سر الأوقاف
+enum AwqafChangeResult {
+  ok,
+  wrongOld, // كلمة السر الحالية خاطئة
+  unsupported, // القواعد أو الجلسة لا تسمح (جهاز دخل بالطريقة القديمة، أو قواعد قديمة)
+  noIdentity, // تعذّر الحصول على هوية Firebase
+  failed, // اتصال أو خطأ آخر
 }
 
 class AttendanceStatus {
@@ -103,7 +113,7 @@ class SyncService {
   static const String parentStudentIdKey = 'parent_student_id';
 
   // الجلسات: إثبات معرفة كلمة المرور/الرمز، تتحقق منها قواعد Firestore (انظر firestore.rules)
-  static const String appVersion = '1.1.0';
+  static const String appVersion = '1.2.0';
   static const String _localHashKey = 'mosque_hash';
   static const String _localAwqafHashKey = 'awqaf_hash';
   static const String _sessionScopeKey = 'session_scope'; // "uid|scope" لآخر جلسة نجحت
@@ -406,6 +416,18 @@ class SyncService {
     for (final doc in halqas.docs) {
       await doc.reference.delete();
     }
+    // حذف الكادر ومعلومات الطلاب وخزنة كلمة السر
+    for (final sub in ['staff', 'studentInfo']) {
+      try {
+        final snap = await mosqueRef.collection(sub).get();
+        for (final doc in snap.docs) {
+          await doc.reference.delete();
+        }
+      } catch (_) {}
+    }
+    try {
+      await _vaultRef(mosqueId).delete();
+    } catch (_) {}
     // حذف الجلسات وأسرار المسجد
     for (final sub in ['sessions', 'parents']) {
       final snap = await mosqueRef.collection(sub).get();
@@ -498,6 +520,98 @@ class SyncService {
         .data()?['passwordHash'] as String?; // null بعد حذف الهاش القديم
     if (hash == null) return false;
     return awqafLogin(hash);
+  }
+
+  /// تغيير كلمة سر الأوقاف. نتحقق من القديمة بإعادة فتح الجلسة بها (السيرفر يرفض الخاطئة)،
+  /// ثم نكتب الهاش الجديد وجلسة هذا الجهاز بنفس الدفعة، فتبقى جلسته صالحة وتسقط جلسات الأجهزة الأخرى.
+  Future<AwqafChangeResult> awqafChangePassword(String oldHash, String newHash) async {
+    final String uid;
+    try {
+      uid = await _ensureUid();
+    } catch (_) {
+      return AwqafChangeResult.noIdentity;
+    }
+    final sessionRef = _db.collection('awqafSessions').doc(uid);
+    Map<String, dynamic> sessionData(String hash) =>
+        {'hash': hash, 'version': appVersion, 'createdAt': FieldValue.serverTimestamp()};
+
+    try {
+      if (await _isPermissionDenied(() => sessionRef.set(sessionData(oldHash)))) {
+        return AwqafChangeResult.wrongOld;
+      }
+      final batch = _db.batch();
+      batch.set(_awqafPrivate, {'passwordHash': newHash});
+      batch.set(sessionRef, sessionData(newHash));
+      await batch.commit().timeout(_netTimeout);
+    } on FirebaseException catch (e) {
+      return e.code == 'permission-denied' ? AwqafChangeResult.unsupported : AwqafChangeResult.failed;
+    } catch (_) {
+      return AwqafChangeResult.failed;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_localAwqafHashKey, newHash);
+    await _markSession('awqaf');
+    return AwqafChangeResult.ok;
+  }
+
+  // =================== الكادر ومعلومات الطالب (محمية بالجلسات) ===================
+
+  CollectionReference<Map<String, dynamic>> _staffRefOf(String mosqueId) =>
+      _mosqueDoc(mosqueId).collection('staff');
+
+  CollectionReference<Map<String, dynamic>> _studentInfoRefOf(String mosqueId) =>
+      _mosqueDoc(mosqueId).collection('studentInfo');
+
+  /// كادر المسجد. بدون وسيط = مسجد هذا الجهاز، ومع [mosqueId] = للأوقاف.
+  Stream<List<StaffMember>> watchStaff({String? mosqueId}) {
+    return _staffRefOf(mosqueId ?? _mosqueId!).snapshots().map((snap) =>
+        snap.docs.map((d) => StaffMember.fromMap(d.id, d.data())).toList());
+  }
+
+  Future<void> saveStaff(StaffMember member) =>
+      _staffRefOf(_mosqueId!).doc(member.id).set(member.toMap());
+
+  Future<void> deleteStaff(String id) => _staffRefOf(_mosqueId!).doc(id).delete();
+
+  Stream<StudentInfo?> watchStudentInfo(String studentId) {
+    return _studentInfoRefOf(_mosqueId!).doc(studentId).snapshots().map((doc) {
+      if (!doc.exists || doc.data() == null) return null;
+      return StudentInfo.fromMap(doc.data()!);
+    });
+  }
+
+  /// معلومات كل طلاب المسجد (خريطة بمعرّف الطالب)
+  Stream<Map<String, StudentInfo>> watchStudentInfos({String? mosqueId}) {
+    return _studentInfoRefOf(mosqueId ?? _mosqueId!).snapshots().map((snap) => {
+          for (final d in snap.docs) d.id: StudentInfo.fromMap(d.data())
+        });
+  }
+
+  Future<void> saveStudentInfo(String studentId, StudentInfo info) =>
+      _studentInfoRefOf(_mosqueId!).doc(studentId).set(info.toMap());
+
+  // =================== خزنة الأوقاف (كلمات سر المساجد مشفّرة) ===================
+
+  DocumentReference<Map<String, dynamic>> _vaultRef(String mosqueId) =>
+      _db.collection('awqafVault').doc(mosqueId);
+
+  /// النص المشفّر لكلمة سر المسجد، أو null إذا لم تُسجَّل
+  Future<String?> getVaultBlob(String mosqueId) async {
+    final doc = await _vaultRef(mosqueId).get();
+    return doc.data()?['blob'] as String?;
+  }
+
+  Future<void> saveVaultBlob(String mosqueId, String blob) =>
+      _vaultRef(mosqueId).set({'blob': blob});
+
+  /// هاش كلمة سر المسجد المقروء علناً (قبل المرحلة 2 فقط)، للتحقق من كلمة سر مُدخلة
+  Future<String?> legacyMosqueHashOf(String mosqueId) async {
+    try {
+      final doc = await _mosqueDoc(mosqueId).get();
+      return doc.data()?['passwordHash'] as String?;
+    } catch (_) {
+      return null;
+    }
   }
 
   // =================== جلسة ولي الأمر ===================
@@ -733,6 +847,10 @@ class SyncService {
     }
     batch.update(_mosqueRef, {'studentCount': FieldValue.increment(-1)});
     await batch.commit();
+    // معلومات الطالب بمجموعة محمية: حذف منفصل حتى لا يفشل حذف الطالب على جهاز بلا جلسة
+    try {
+      await _studentInfoRefOf(_mosqueId!).doc(id).delete();
+    } catch (_) {}
   }
 
   // =================== الحلقات ===================

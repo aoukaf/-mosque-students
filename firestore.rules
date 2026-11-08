@@ -17,6 +17,7 @@ service cloud.firestore {
 
     function signedIn() { return request.auth != null; }
     function validHash(h) { return h is string && h.size() == 64; }
+    function okText(v, n) { return v is string && v.size() <= n; }
 
     function mosquePath(m) { return /databases/$(database)/documents/mosques/$(m); }
     function configPath(m) { return /databases/$(database)/documents/mosques/$(m)/private/config; }
@@ -173,6 +174,50 @@ service cloud.firestore {
           && get(parentCodePath(request.resource.data.code)).data.mosqueId == mosqueId
           && get(parentCodePath(request.resource.data.code)).data.studentId == request.resource.data.studentId;
       allow delete: if signedIn() && (request.auth.uid == uid || isTeacher(mosqueId) || isAwqaf());
+    }
+
+    // ───────── الكادر ومعلومات الطالب: بيانات شخصية، محمية بالجلسات من اليوم الأول ─────────
+    // يكتب معلم المسجد نفسه، وتقرأ الأوقاف. لا ولي أمر ولا أجهزة بلا جلسة (حتى بالمرحلة 1).
+
+    match /mosques/{mosqueId}/staff/{id} {
+      allow read: if isTeacher(mosqueId) || isAwqaf();
+      allow create, update: if isTeacher(mosqueId)
+          && request.resource.data.keys().hasOnly(
+               ['role', 'fullName', 'education', 'job', 'birthDate', 'phone', 'quranStatus', 'memorizedParts', 'halqa'])
+          && request.resource.data.role in ['teacher', 'assistant', 'mosqueSupervisor', 'halqaSupervisor']
+          && request.resource.data.fullName is string
+          && request.resource.data.fullName.size() > 0
+          && request.resource.data.fullName.size() <= 120
+          && request.resource.data.quranStatus in ['mujaz', 'khatim', 'none']
+          && okText(request.resource.data.get('education', ''), 120)
+          && okText(request.resource.data.get('job', ''), 120)
+          && okText(request.resource.data.get('birthDate', ''), 10)
+          && okText(request.resource.data.get('phone', ''), 25)
+          && okText(request.resource.data.get('halqa', ''), 120)
+          && (!('memorizedParts' in request.resource.data)
+              || (request.resource.data.memorizedParts is int
+                  && request.resource.data.memorizedParts >= 0
+                  && request.resource.data.memorizedParts <= 30));
+      allow delete: if isTeacher(mosqueId) || isAwqaf();
+    }
+
+    match /mosques/{mosqueId}/studentInfo/{id} {
+      allow read: if isTeacher(mosqueId) || isAwqaf();
+      allow create, update: if isTeacher(mosqueId)
+          && request.resource.data.keys().hasOnly(['phone', 'grade'])
+          && okText(request.resource.data.get('phone', ''), 25)
+          && okText(request.resource.data.get('grade', ''), 60);
+      allow delete: if isTeacher(mosqueId) || isAwqaf();
+    }
+
+    // ───────── خزنة الأوقاف: كلمات سر المساجد مشفّرة (AES-GCM بمفتاح من كلمة سر الأوقاف) ─────────
+
+    match /awqafVault/{mosqueId} {
+      allow read, delete: if isAwqaf();
+      allow create, update: if isAwqaf()
+          && request.resource.data.keys().hasOnly(['blob'])
+          && request.resource.data.blob is string
+          && request.resource.data.blob.size() < 2000;
     }
 
     // ───────── البيانات الفرعية: طلاب، حلقات، حضور، واجبات (مفتوحة بالمرحلة 1) ─────────
