@@ -25,7 +25,8 @@ void main() async {
   String? authError; // تشخيص مؤقت: يظهر سبب فشل الدخول المجهول بدل تجاهله بصمت
   if (FirebaseAuth.instance.currentUser == null) {
     try {
-      await FirebaseAuth.instance.signInAnonymously();
+      // مهلة قصيرة: على اتصال بطيء لا نترك التطبيق معلّقاً على شاشة التحميل
+      await FirebaseAuth.instance.signInAnonymously().timeout(const Duration(seconds: 8));
     } catch (e) {
       // إذا فشل Auth لا نوقف التطبيق
       authError = e is FirebaseAuthException ? '${e.code}: ${e.message}' : '$e';
@@ -60,17 +61,20 @@ void main() async {
   String? notice;
   try {
     final sync = SyncService();
-    final bool ok;
+    final Future<bool> ensure;
     if (isParent) {
-      ok = await sync.ensureParentSession(
+      ensure = sync.ensureParentSession(
           parentCode, ParentLink(mosqueId: parentMosqueId, studentId: parentStudentId));
     } else if (isAwqaf) {
-      ok = await sync.ensureAwqafSession();
+      ensure = sync.ensureAwqafSession();
     } else if (mosqueId != null) {
-      ok = await sync.ensureTeacherSession();
+      ensure = sync.ensureTeacherSession();
     } else {
-      ok = true;
+      ensure = Future.value(true);
     }
+    // لا ننتظر الشبكة أكثر من 4 ثوانٍ قبل فتح التطبيق؛ إن تأخرت يكمل التحقق بالخلفية.
+    // (أي خطأ متأخر نبتلعه حتى لا يظهر كاستثناء غير معالَج)
+    final ok = await ensure.catchError((_) => true).timeout(const Duration(seconds: 4));
     if (!ok) {
       await prefs.remove(SyncService.mosqueIdKey);
       await prefs.remove(SyncService.userRoleKey);

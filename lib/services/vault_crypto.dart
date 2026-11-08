@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart' show compute;
 
 /// تشفير "خزنة الأوقاف": كلمات سر المساجد تُخزَّن مشفّرة بمفتاح مشتق من كلمة سر الأوقاف.
 /// PBKDF2-HMAC-SHA256 لاشتقاق المفتاح، وAES-256-GCM للتشفير (مع ملح وnonce عشوائيين لكل قيمة).
@@ -15,7 +16,11 @@ class VaultCrypto {
     bits: 256,
   );
 
-  static Future<String> encrypt(String plaintext, String awqafPassword) async {
+  /// اشتقاق المفتاح (PBKDF2) ثقيل، فيعمل بمعزل (isolate) حتى لا يجمّد الواجهة
+  static Future<String> encrypt(String plaintext, String awqafPassword) =>
+      compute(_encryptTop, [plaintext, awqafPassword]);
+
+  static Future<String> _encryptImpl(String plaintext, String awqafPassword) async {
     final salt = SecretKeyData.random(length: 16).bytes;
     final key = await _kdf.deriveKeyFromPassword(password: awqafPassword, nonce: salt);
     final box = await _aes.encrypt(utf8.encode(plaintext), secretKey: key);
@@ -93,7 +98,10 @@ class VaultCrypto {
   }
 
   /// null = كلمة السر خاطئة أو البيانات تالفة
-  static Future<String?> decrypt(String blob, String awqafPassword) async {
+  static Future<String?> decrypt(String blob, String awqafPassword) =>
+      compute(_decryptTop, [blob, awqafPassword]);
+
+  static Future<String?> _decryptImpl(String blob, String awqafPassword) async {
     try {
       final m = jsonDecode(blob) as Map<String, dynamic>;
       if (m['v'] != _version) return null;
@@ -110,3 +118,7 @@ class VaultCrypto {
     }
   }
 }
+
+// دوال المستوى الأعلى المطلوبة لـ compute() (تعمل بمعزل عن خيط الواجهة)
+Future<String> _encryptTop(List<String> a) => VaultCrypto._encryptImpl(a[0], a[1]);
+Future<String?> _decryptTop(List<String> a) => VaultCrypto._decryptImpl(a[0], a[1]);

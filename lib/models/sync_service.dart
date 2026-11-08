@@ -227,7 +227,8 @@ class SyncService {
   Future<bool> _legacyTeacherLogin(String mosqueId, String passwordHash) async {
     try {
       final doc = await _mosqueDoc(mosqueId).get().timeout(_netTimeout);
-      if (doc.data()?['passwordHash'] != passwordHash) return false;
+      // trim: قد يلتصق بالقيمة سطر جديد عند اللصق بـ Console، وهذا لا يغيّر الهاش نفسه
+      if ((doc.data()?['passwordHash'] as String?)?.trim() != passwordHash) return false;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_localHashKey, passwordHash);
       return true;
@@ -239,7 +240,8 @@ class SyncService {
   Future<bool> _legacyAwqafLogin(String passwordHash) async {
     try {
       final doc = await _db.collection(_awqafCollection).doc('config').get().timeout(_netTimeout);
-      if (doc.data()?['passwordHash'] != passwordHash) return false;
+      // trim: قد يلتصق بالقيمة سطر جديد عند اللصق بـ Console، وهذا لا يغيّر الهاش نفسه
+      if ((doc.data()?['passwordHash'] as String?)?.trim() != passwordHash) return false;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_localAwqafHashKey, passwordHash);
       return true;
